@@ -5,19 +5,21 @@ on:
     branches: [main]
   pull_request:
   schedule:
-    - cron: "17 3 * * 1"   # weekly rebuild for Fedora updates
+    - cron: "17 3 * * *"   # daily: Fedora updates and the newest KimiLM release
   workflow_dispatch:
 
 env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/kimios
   FEDORA_VERSION: "45"
+  # The newest KimiLM Linux build; a repository variable KIMILM_URL overrides it
+  KIMILM_URL: ${{ vars.KIMILM_URL || 'https://github.com/kiplabat/KimiLM/releases/latest/download/KimiLM-linux-x64.tar.gz' }}
 
 jobs:
   test:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - run: python -m unittest discover -s tests -v
@@ -30,7 +32,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Free disk space
         run: |
@@ -43,7 +45,7 @@ jobs:
           echo "IMAGE_LC=$IMAGE_LC" >> "$GITHUB_ENV"
           podman build \
             --build-arg FEDORA_VERSION="$FEDORA_VERSION" \
-            --build-arg KIMILM_URL="${{ vars.KIMILM_URL }}" \
+            --build-arg KIMILM_URL="$KIMILM_URL" \
             -t "$IMAGE_LC:latest" .
 
       - name: Push

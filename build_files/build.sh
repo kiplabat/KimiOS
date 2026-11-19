@@ -17,17 +17,23 @@ fi
 
 chmod 0755 /usr/libexec/kimios/kimios-session /usr/libexec/kimios/kimi-hwprobe
 
-# KimiLM (optional until the KimiLM Linux build exists; docs/SCOPE.md Phase 1)
+# KimiLM (docs/SCOPE.md Phase 1): the Linux build from KimiLM's GitHub releases.
+# Before the first release exists (HTTP 404) the image is built without it and the session opens GNOME.
+# Any other download failure stops the build, so a network fault never ships an image without KimiLM.
 if [[ -n "${KIMILM_URL:-}" ]]; then
-  mkdir -p /usr/lib/kimilm
-  curl -fsSL --retry 3 "${KIMILM_URL}" | tar -xz -C /usr/lib/kimilm --strip-components=1
-  for name in kimilm KimiLM; do
-    if [[ -x "/usr/lib/kimilm/${name}" ]]; then
-      ln -sf "/usr/lib/kimilm/${name}" /usr/bin/kimilm
-      break
-    fi
-  done
-  [[ -x /usr/bin/kimilm ]] || { echo "KimiLM archive has no kimilm executable" >&2; exit 1; }
+  status="$(curl -sSL --retry 3 -o /dev/null -w '%{http_code}' -r 0-0 "${KIMILM_URL}" || true)"
+  if [[ "${status}" == "404" ]]; then
+    echo "WARNING: no KimiLM release at ${KIMILM_URL} yet; building without KimiLM" >&2
+  else
+    mkdir -p /usr/lib/kimilm
+    curl -fsSL --retry 3 "${KIMILM_URL}" | tar -xz -C /usr/lib/kimilm --strip-components=1
+    [[ -x /usr/lib/kimilm/kimilm ]] || { echo "KimiLM archive has no kimilm executable" >&2; exit 1; }
+    ln -sf /usr/lib/kimilm/kimilm /usr/bin/kimilm
+    # Electron's sandbox helper, for systems where user namespaces are switched off
+    chmod 4755 /usr/lib/kimilm/chrome-sandbox
+    install -Dm0644 /usr/lib/kimilm/resources/ui/icon.png /usr/share/icons/hicolor/512x512/apps/kimilm.png
+    install -Dm0644 /tmp/build_files/kimilm.desktop /usr/share/applications/kimilm.desktop
+  fi
 fi
 
 systemctl enable kimi-hwprobe.service

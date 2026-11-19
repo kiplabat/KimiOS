@@ -108,6 +108,9 @@ Silverblue machine boots into it; `/var/lib/kimios/hardware.json` describes that
 
 **Done when:** KimiOS boots straight into KimiLM and a local model chat works on the reference laptop.
 
+**Status (19 Nov 2026):** built in KimiLM 2.22.0 (Linux build, release workflow, engine in `kimilm.slice`) and
+KimiOS 0.2.0 (installs the newest KimiLM release daily). Waiting on the first KimiLM release and a test on real hardware.
+
 ### Phase 2 — OS MCP server and installer
 
 - OS MCP server with permission tiers: read (graph, logs, settings) → user actions (files, Flatpak

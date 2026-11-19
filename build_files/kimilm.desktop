@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=KimiLM
+Comment=Local AI agents on your own computer
+Exec=/usr/bin/kimilm %U
+Icon=kimilm
+Terminal=false
+Type=Application
+Categories=Utility;
+StartupWMClass=KimiLM
