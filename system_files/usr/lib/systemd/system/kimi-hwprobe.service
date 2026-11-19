@@ -1,0 +1,16 @@
+[Unit]
+Description=KimiOS hardware probe (capability graph)
+Documentation=https://github.com/kiplabat/KimiOS/blob/main/docs/SCOPE.md
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/kimios/kimi-hwprobe --output /var/lib/kimios/hardware.json
+ProtectSystem=strict
+StateDirectory=kimios
+ProtectHome=yes
+PrivateNetwork=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,16 @@
+[Unit]
+Description=KimiLM and the models it runs
+Documentation=https://github.com/kiplabat/KimiOS/blob/main/docs/SCOPE.md
+
+[Slice]
+# Above MemoryHigh the kernel reclaims memory from this slice first; at
+# MemoryMax the kernel kills the largest process inside it (normally a model
+# server), never the rest of the system.
+MemoryHigh=70%
+MemoryMax=85%
+# Let systemd-oomd act early when this slice causes sustained memory pressure.
+ManagedOOMMemoryPressure=kill
+ManagedOOMMemoryPressureLimit=60%
+# Keep the desktop responsive while models run.
+CPUWeight=80
+IOWeight=80

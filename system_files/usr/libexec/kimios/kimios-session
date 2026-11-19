@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# KimiOS session: KimiLM full screen in the cage kiosk compositor.
+# Everything started here runs in kimilm.slice, so model processes are held to
+# its memory limits and are killed before the rest of the system suffers.
+set -u
+
+if [[ -x /usr/bin/kimilm ]] && command -v cage >/dev/null 2>&1; then
+  exec systemd-run --user --scope --quiet --collect \
+    --slice=kimilm.slice --unit="kimios-session-$$" \
+    cage -d -- /usr/bin/kimilm --ozone-platform=wayland
+fi
+
+# KimiLM is not installed in this image yet: fall back to GNOME.
+export XDG_CURRENT_DESKTOP=GNOME XDG_SESSION_DESKTOP=gnome
+exec gnome-session
