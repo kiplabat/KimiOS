@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=KimiOS
+Comment=KimiLM as the whole desktop
+Exec=/usr/libexec/kimios/kimios-session
+Type=Application
+DesktopNames=KimiOS

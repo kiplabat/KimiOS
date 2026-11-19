@@ -1,0 +1,2 @@
+# Re-run the KimiOS hardware probe when a device is added or removed.
+ACTION=="add|remove", SUBSYSTEM=="usb|pci|tty|iio|video4linux|sound|gpio|i2c-dev|hidraw", ENV{DEVTYPE}!="usb_interface", TAG+="systemd", ENV{SYSTEMD_WANTS}+="kimi-hwprobe.service"

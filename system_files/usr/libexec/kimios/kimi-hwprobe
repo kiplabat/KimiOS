@@ -1,0 +1,233 @@
+#!/usr/bin/env python3
+"""KimiOS hardware probe: describe this machine as a capability graph.
+
+Reads only /sys and /proc (standard library, no root needed for reading) and
+writes JSON. Devices with no bound driver are listed under "unclaimed": that
+list is the queue for driver synthesis (docs/SCOPE.md §2.2).
+
+Usage: kimi-hwprobe [--root /] [--output FILE]
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import platform
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+SCHEMA = 1
+
+# Device classes under /sys/class and the capability each one gives the machine.
+CLASS_CAPABILITIES = {
+    "drm": "display",
+    "sound": "audio",
+    "net": "network",
+    "video4linux": "camera",
+    "input": "input",
+    "block": "storage",
+    "iio": "sensor",
+    "hwmon": "sensor",
+    "thermal": "thermal",
+    "power_supply": "power",
+    "backlight": "backlight",
+    "bluetooth": "bluetooth",
+    "pwm": "pwm",
+    "i2c-dev": "i2c",
+    "gpio": "gpio",
+    "tty": "serial",
+    "leds": "led",
+    "rfkill": "radio-switch",
+}
+
+# PCI class codes (first byte) worth naming.
+PCI_CLASSES = {
+    0x01: "storage", 0x02: "network", 0x03: "display", 0x04: "multimedia",
+    0x06: "bridge", 0x07: "communication", 0x08: "system", 0x09: "input",
+    0x0C: "serial-bus", 0x0D: "wireless", 0x10: "encryption", 0x11: "signal-processing",
+    0x12: "accelerator", 0x13: "instrumentation",
+}
+
+# USB interface class codes.
+USB_CLASSES = {
+    0x01: "audio", 0x02: "communication", 0x03: "hid", 0x05: "physical", 0x06: "image",
+    0x07: "printer", 0x08: "storage", 0x09: "hub", 0x0A: "cdc-data", 0x0B: "smart-card",
+    0x0E: "video", 0x0F: "healthcare", 0x10: "audio-video", 0xE0: "wireless",
+    0xEF: "misc", 0xFE: "application", 0xFF: "vendor-specific",
+}
+
+
+def read(path: Path, default: str | None = None) -> str | None:
+    try:
+        return path.read_text(errors="replace").strip()
+    except OSError:
+        return default
+
+
+def driver_of(dev: Path) -> str | None:
+    link = dev / "driver"
+    try:
+        return Path(os.readlink(link)).name
+    except OSError:
+        return None
+
+
+def hexint(value: str | None) -> int | None:
+    if not value:
+        return None
+    try:
+        return int(value, 16)
+    except ValueError:
+        return None
+
+
+def probe_machine(root: Path) -> dict:
+    dmi = root / "sys/class/dmi/id"
+    cpuinfo = read(root / "proc/cpuinfo", "") or ""
+    model = next((line.split(":", 1)[1].strip() for line in cpuinfo.splitlines()
+                  if line.lower().startswith(("model name", "hardware", "cpu model"))), None)
+    threads = sum(1 for line in cpuinfo.splitlines() if line.startswith("processor"))
+    meminfo = read(root / "proc/meminfo", "") or ""
+    mem_kb = next((int(line.split()[1]) for line in meminfo.splitlines()
+                   if line.startswith("MemTotal:")), None)
+    return {
+        "vendor": read(dmi / "sys_vendor"),
+        "product": read(dmi / "product_name"),
+        "board": read(dmi / "board_name"),
+        "devicetree_model": (read(root / "proc/device-tree/model") or "").rstrip("\x00") or None,
+        "architecture": platform.machine(),
+        "cpu": {"model": model, "threads": threads or None},
+        "memory_bytes": mem_kb * 1024 if mem_kb else None,
+    }
+
+
+def probe_pci(root: Path) -> list[dict]:
+    out = []
+    for dev in sorted((root / "sys/bus/pci/devices").glob("*")):
+        cls = hexint(read(dev / "class"))
+        base = (cls >> 16) if cls is not None else None
+        out.append({
+            "bus": "pci",
+            "address": dev.name,
+            "vendor_id": read(dev / "vendor"),
+            "device_id": read(dev / "device"),
+            "class": PCI_CLASSES.get(base, f"0x{base:02x}" if base is not None else None),
+            "driver": driver_of(dev),
+        })
+    return out
+
+
+def probe_usb(root: Path) -> list[dict]:
+    out = []
+    devices = root / "sys/bus/usb/devices"
+    for dev in sorted(devices.glob("*")):
+        if ":" in dev.name or not (dev / "idVendor").exists():
+            continue  # interfaces are folded into their device below
+        interfaces = []
+        for intf in sorted(devices.glob(dev.name + ":*")):
+            code = hexint(read(intf / "bInterfaceClass"))
+            interfaces.append({
+                "class": USB_CLASSES.get(code, f"0x{code:02x}" if code is not None else None),
+                "driver": driver_of(intf),
+            })
+        is_hub = any(i["class"] == "hub" for i in interfaces) or dev.name.startswith("usb")
+        out.append({
+            "bus": "usb",
+            "address": dev.name,
+            "vendor_id": read(dev / "idVendor"),
+            "device_id": read(dev / "idProduct"),
+            "manufacturer": read(dev / "manufacturer"),
+            "product": read(dev / "product"),
+            "hub": is_hub,
+            "interfaces": interfaces,
+            # A device counts as driven when any non-hub interface has a driver.
+            "driver": next((i["driver"] for i in interfaces if i["driver"]), None),
+        })
+    return out
+
+
+def probe_classes(root: Path) -> dict[str, list[str]]:
+    found: dict[str, list[str]] = {}
+    for cls in CLASS_CAPABILITIES:
+        base = root / "sys/class" / cls
+        if not base.is_dir():
+            continue
+        names = sorted(p.name for p in base.iterdir())
+        if cls == "tty":  # only real serial ports, not virtual consoles
+            names = [n for n in names if n.startswith(("ttyUSB", "ttyACM", "ttyAMA", "ttyS"))
+                     and (base / n / "device").exists()]
+        if cls == "drm":
+            names = [n for n in names if n.startswith("card") and "-" not in n]
+        if cls == "gpio":
+            names = [n for n in names if n.startswith("gpiochip")]
+        if names:
+            found[cls] = names
+    gpiochips = sorted(p.name for p in (root / "sys/bus/gpio/devices").glob("gpiochip*"))
+    if gpiochips:
+        found["gpio"] = sorted(set(found.get("gpio", [])) | set(gpiochips))
+    return found
+
+
+def capabilities(classes: dict[str, list[str]], pci: list[dict]) -> list[str]:
+    caps = {CLASS_CAPABILITIES[c] for c in classes}
+    if any(d["class"] in ("display", "accelerator") for d in pci) or "drm" in classes:
+        caps.add("gpu")
+    if any(d["class"] == "accelerator" for d in pci):
+        caps.add("npu")
+    return sorted(caps)
+
+
+def unclaimed(pci: list[dict], usb: list[dict]) -> list[dict]:
+    out = []
+    for d in pci:
+        if d["driver"] is None and d["class"] != "bridge":
+            out.append({k: d[k] for k in ("bus", "address", "vendor_id", "device_id", "class")})
+    for d in usb:
+        if d["driver"] is None and not d["hub"]:
+            out.append({k: d[k] for k in ("bus", "address", "vendor_id", "device_id", "product")})
+    return out
+
+
+def probe(root: Path = Path("/")) -> dict:
+    pci = probe_pci(root)
+    usb = probe_usb(root)
+    classes = probe_classes(root)
+    return {
+        "schema": SCHEMA,
+        "probed_at": int(time.time()),
+        "machine": probe_machine(root),
+        "capabilities": capabilities(classes, pci),
+        "classes": classes,
+        "devices": pci + usb,
+        "unclaimed": unclaimed(pci, usb),
+    }
+
+
+def write_atomic(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".hardware-")
+    with os.fdopen(fd, "w") as fh:
+        json.dump(data, fh, indent=2)
+        fh.write("\n")
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, path)
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--root", default="/", help="filesystem root to read (for tests)")
+    ap.add_argument("--output", help="write JSON here instead of standard output")
+    args = ap.parse_args(argv)
+    data = probe(Path(args.root))
+    if args.output:
+        write_atomic(Path(args.output), data)
+    else:
+        json.dump(data, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
