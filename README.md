@@ -8,7 +8,7 @@ it has never seen.
 It is built on [Fedora bootc](https://docs.fedoraproject.org/en-US/bootc/): the system is a container
 image that is replaced as a whole and can be rolled back with one reboot.
 
-**Status:** Phase 0 (image pipeline, session, memory limits, hardware probe). See
+**Status:** Phase 1 (boots into KimiLM, installed from KimiLM's newest Linux release; memory limits; hardware probe). See
 [docs/SCOPE.md](docs/SCOPE.md) for the full plan.
 
 ## Try it
