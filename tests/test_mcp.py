@@ -177,6 +177,96 @@ class ToolTest(unittest.TestCase):
         self.assertEqual(mcp._gv("it's"), "'it\\'s'")
 
 
+class DeviceAndAbilitiesTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        r = self.root = Path(self.tmp.name)
+        usb = r / "sys/bus/usb/devices"
+        put(usb / "1-7/idVendor", "06cb\n")
+        put(usb / "1-7/idProduct", "00e9\n")
+        put(usb / "1-7:1.0/bInterfaceClass", "ff\n")
+        put(usb / "1-7:1.0/modalias", "usb:v06CBp00E9d0000dcFFdsc10dp00icFFisc00ip00in00\n")
+        put(usb / "1-3/idVendor", "8087\n")
+        put(usb / "1-3/idProduct", "0026\n")
+        put(usb / "1-3:1.0/bInterfaceClass", "e0\n")
+        put(usb / "1-3:1.0/modalias", "usb:v8087p0026d0002dcE0dsc01dp01icE0isc01ip01in00\n")
+        pci = r / "sys/bus/pci/devices/0000:00:14.2"
+        put(pci / "vendor", "0x8086\n")
+        put(pci / "device", "0x02ef\n")
+        put(pci / "class", "0x050000\n")
+        put(pci / "modalias", "pci:v00008086d000002EFsv0000103Csd0000876Dbc05sc00i00\n")
+        (r / "sys/module/btusb").mkdir(parents=True)
+        put(r / "hwdata/usb.ids", "# comment\n06cb  Synaptics, Inc.\n\t00e9  Prometheus Fingerprint Reader\n"
+            "8087  Intel Corp.\n\t0026  AX201 Bluetooth\n")
+        put(r / "hwdata/pci.ids", "8086  Intel Corporation\n\t02ef  Comet Lake PCH-LP Shared SRAM\n")
+        put(r / "modules/modules.alias", "alias usb:v8087p0026d*dc*dsc*dp*ic*isc*ip*in* btusb\n"
+            "alias usb:v*p*d*dc*dsc*dp*icE0isc01ip01in* btusb\n")
+        self.patches = [mock.patch.object(mcp, "ROOT", r), mock.patch.object(mcp, "HWDATA", r / "hwdata"),
+                        mock.patch.object(mcp, "MODULES", r / "modules")]
+        for p in self.patches:
+            p.start()
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        self.tmp.cleanup()
+
+    def test_a_fingerprint_reader_without_a_driver(self):
+        d = mcp.tool_device_inspect("1-7")
+        self.assertEqual((d["bus"], d["vendor"], d["product"]), ("usb", "Synaptics, Inc.", "Prometheus Fingerprint Reader"))
+        self.assertEqual(d["kernel_modules"], [])
+        self.assertIn("fprintd", d["next_step"])
+
+    def test_a_device_whose_kernel_driver_is_known_and_loaded(self):
+        d = mcp.tool_device_inspect("1-3")
+        self.assertEqual(d["kernel_modules"], ["btusb"])
+        self.assertEqual(d["loaded_modules"], ["btusb"])
+
+    def test_a_pci_memory_controller_needs_nothing(self):
+        d = mcp.tool_device_inspect("0000:00:14.2")
+        self.assertEqual(d["bus"], "pci")
+        self.assertEqual(d["product"], "Comet Lake PCH-LP Shared SRAM")
+        self.assertIn("needs no driver", d["next_step"])
+
+    def test_unknown_address(self):
+        self.assertIn("error", mcp.tool_device_inspect("9-9"))
+
+    def test_abilities_come_from_kimilm_measurements(self):
+        import sqlite3
+        db = self.root / "kimilm.sqlite3"
+        con = sqlite3.connect(db)
+        con.executescript(
+            "CREATE TABLE models (id TEXT, name TEXT, size INTEGER, quant TEXT, bench_json TEXT);"
+            "CREATE TABLE eval_runs (model TEXT, created TEXT, version TEXT, status TEXT, summary_json TEXT);")
+        con.execute("INSERT INTO models VALUES ('qwen3.5-4b','Qwen3.5 4B',2700000000,'Q4_K_M',"
+                    "'{\"prompt_per_second\": 14, \"predicted_per_second\": 3.9}')")
+        con.execute("INSERT INTO models VALUES ('qwen3.5-9b','Qwen3.5 9B',5400000000,'Q4_K_M','{}')")
+        con.execute("INSERT INTO models VALUES ('gemma','Gemma',9000000000,'Q3_K_M','{}')")
+        con.execute("INSERT INTO eval_runs VALUES ('qwen3.5-4b','2026-11-20T05:57','2.22.0','done',"
+                    "'{\"passed\": 12, \"total\": 12, \"seconds\": 1440}')")
+        con.execute("INSERT INTO eval_runs VALUES ('qwen3.5-9b','2026-11-20T06:22','2.22.0','done',"
+                    "'{\"passed\": 12, \"total\": 12, \"seconds\": 3120}')")
+        con.commit()
+        con.close()
+        put(self.root / "proc/meminfo", "MemTotal: 33300000 kB\nMemAvailable: 20000000 kB\n")
+        with mock.patch.object(mcp, "KIMILM_DB", db), \
+                mock.patch.object(mcp, "tool_machine", lambda section="summary": {"machine": {"vendor": "HP"}}):
+            a = mcp.tool_abilities()
+        self.assertEqual(a["best_for_agent_work"]["model"], "qwen3.5-4b")        # as accurate, and faster
+        self.assertEqual(a["best_for_agent_work"]["minutes"], 24)
+        self.assertEqual(a["not_measured_yet"], ["gemma"])
+        four = next(m for m in a["local_models"] if m["id"] == "qwen3.5-4b")
+        self.assertEqual((four["reads_per_second"], four["writes_per_second"]), (14, 3.9))
+
+    def test_abilities_without_kimilm(self):
+        put(self.root / "proc/meminfo", "MemTotal: 1000 kB\n")
+        with mock.patch.object(mcp, "KIMILM_DB", self.root / "none.sqlite3"), \
+                mock.patch.object(mcp, "tool_machine", lambda section="summary": {}):
+            a = mcp.tool_abilities()
+        self.assertEqual(a["local_models"], [])
+        self.assertIsNone(a["best_for_agent_work"])
+
+
 class PluginTest(unittest.TestCase):
     def test_kimilm_plugin_points_at_the_server(self):
         plugin = json.loads(PLUGIN.read_text())

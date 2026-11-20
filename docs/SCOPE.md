@@ -187,7 +187,8 @@ Found on the way: Fedora 45 ships OpenSSL 4, so KimiOS adds `openssl3-libs` (0.2
 
 **Started (20 Nov 2026), KimiOS 0.3.0:** `kimios-mcp`, an MCP server over stdio with no dependencies, offered to
 KimiLM as a system plugin (`/usr/share/kimilm/plugins/kimios`, read by KimiLM 2.23.0). Tools:
-look (`machine`, `system_status`, `os_status`, `software`, `drives`, `setting_get`, `logs`), act (`open`,
+look (`machine`, `device_inspect`, `abilities`, `system_status`, `os_status`, `software`, `drives`,
+`setting_get`, `logs`), act (`open`,
 `launch_app`, `notify`, `setting_set` on an allow-list, returning the old value; `mount_drive`; `app_install`),
 remove (`app_remove`). MCP annotations mark read-only and destructive tools; KimiLM's approval mode decides what
 asks first. The registry reads desktop entries (system, user, Flatpak) and, on request, matching commands.
@@ -199,9 +200,17 @@ Still to do: snapshots before risky actions, the installer ISO, richer registry 
 - Self-model and bounded exploration (§2.5), starting from KimiLM's tuner and evaluation.
 - Suggestions from the user's activity, opt-in (§2.6).
 
+**Started (0.3.0):** the `abilities` tool is the first self-model. It reads KimiLM's own measurements (model
+speeds, evaluation scores) read-only, adds memory headroom and power, and names the best local model for agent
+work (on the reference laptop: Qwen3.5 4B, 12 of 12 in 24 min). Bounded exploration and suggestions are next.
+
 ### Phase 3 — Driver synthesis
 
 - The pipeline in §2.2 for USB, serial, I2C and GPIO devices.
+- **Started (0.3.0):** steps 1 and 2 of §2.2 as the `device_inspect` tool: names from hwdata, interfaces,
+  kernel modules whose aliases match the device and whether they are loaded, and the next step. On the reference
+  laptop's unclaimed list it tells the Synaptics fingerprint reader (user-space, fprintd) from a chipset memory
+  controller that needs nothing.
 - Test bench: a USB sensor, a serial device and a GPIO board (for example a Raspberry Pi as a second node).
 
 ### Phase 4 — Skill learning and Edge

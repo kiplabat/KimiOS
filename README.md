@@ -31,7 +31,8 @@ cat /var/lib/kimios/hardware.json
 ## What agents can do on KimiOS
 
 KimiLM connects to `kimios-mcp`, KimiOS's tool server, by itself (Plugins & connectors → KimiOS). Agents can
-then look up the hardware, the installed apps and what they open, memory, battery, temperatures, network and
+then look up the hardware (and what any device without a driver would need), what the machine has shown it can
+do (its models' measured speeds and scores), the installed apps and what they open, memory, battery, temperatures, network and
 disks, drives, logs and the installed KimiOS versions; and, with your approval where KimiLM asks for it, open
 files and apps, change allowed desktop settings (each change reports the old value), mount drives, show
 notifications and install or remove Flathub apps.

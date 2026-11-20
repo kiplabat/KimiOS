@@ -5,7 +5,7 @@ An MCP server over stdio (newline-delimited JSON-RPC), standard library only. Ki
 system plugin /usr/share/kimilm/plugins/kimios. docs/SCOPE.md §2 ("OS MCP server") and §2.4 (software registry).
 
 Tools, by how much they change (MCP annotations tell the client; the client decides what needs approval):
-  look      machine, system_status, software, drives, setting_get, logs, os_status
+  look      machine, device_inspect, abilities, system_status, software, drives, setting_get, logs, os_status
   act       open, launch_app, notify, setting_set (allow-listed desktop settings; returns the old value),
             mount_drive, app_install
   remove    app_remove
@@ -16,9 +16,12 @@ and ping, which have not changed between versions.
 from __future__ import annotations
 
 import configparser
+import fnmatch
 import json
 import os
+import platform
 import shutil
+import sqlite3
 import subprocess
 import sys
 import time
@@ -98,6 +101,170 @@ def tool_machine(section="summary"):
     return {"machine": data.get("machine"), "capabilities": data.get("capabilities"),
             "classes": data.get("classes"), "devices": len(data.get("devices", [])),
             "unclaimed": len(data.get("unclaimed", [])), "probed_at": data.get("probed_at")}
+
+
+# ------------------------------------------------------------------------------------------------- devices (Phase 3)
+HWDATA = Path(os.environ.get("KIMIOS_HWDATA", "/usr/share/hwdata"))
+MODULES = Path(os.environ.get("KIMIOS_MODULES", f"/lib/modules/{platform.release()}"))
+
+
+def _id_name(db_file, vendor, device=None):
+    """Vendor and product names from the hwdata lists (usb.ids, pci.ids)."""
+    vendor, device = (vendor or "").lower().replace("0x", ""), (device or "").lower().replace("0x", "")
+    vname = dname = None
+    try:
+        with open(db_file, encoding="utf-8", errors="replace") as f:
+            in_vendor = False
+            for line in f:
+                if not line.strip() or line.startswith("#"):
+                    continue
+                if not line.startswith("\t"):
+                    if in_vendor:
+                        break
+                    if line[:4].lower() == vendor:
+                        vname, in_vendor = line[4:].strip(), True
+                elif in_vendor and device and not line.startswith("\t\t") and line[1:5].lower() == device:
+                    dname = line[5:].strip()
+                    break
+    except OSError:
+        pass
+    return vname, dname
+
+
+def _kernel_modules_for(modaliases):
+    """Kernel modules whose alias patterns match the device's modalias strings (modules.alias)."""
+    found = []
+    try:
+        with open(MODULES / "modules.alias", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) == 3 and parts[0] == "alias" and any(fnmatch.fnmatchcase(m, parts[1]) for m in modaliases):
+                    if parts[2] not in found:
+                        found.append(parts[2])
+    except OSError:
+        pass
+    return found
+
+
+def tool_device_inspect(address=""):
+    """Everything known about one device, and what it would take to drive it. Without an address: the devices
+    that have no driver (the hardware probe's unclaimed list)."""
+    if not address:
+        unclaimed = tool_machine("unclaimed")["unclaimed"]
+        return {"unclaimed": [{**d, **_describe(d.get("bus"), d.get("address"))} for d in unclaimed]}
+    bus = "usb" if ":" not in address or "-" in address.split(":")[0] else "pci"
+    return {"bus": bus, "address": address, **_describe(bus, address)}
+
+
+def _describe(bus, address):
+    sysfs = ROOT / f"sys/bus/{bus}/devices/{address}"
+    if not sysfs.exists():
+        return {"error": f"no {bus} device at {address}"}
+    if bus == "usb":
+        vendor, product = read(sysfs / "idVendor"), read(sysfs / "idProduct")
+        interfaces = []
+        for intf in sorted(sysfs.parent.glob(address + ":*")):
+            drv = intf / "driver"
+            interfaces.append({"class": read(intf / "bInterfaceClass"), "subclass": read(intf / "bInterfaceSubClass"),
+                               "protocol": read(intf / "bInterfaceProtocol"), "modalias": read(intf / "modalias"),
+                               "driver": os.path.basename(os.readlink(drv)) if drv.is_symlink() else None})
+        aliases = [i["modalias"] for i in interfaces if i["modalias"]] + [m for m in [read(sysfs / "modalias")] if m]
+        names = _id_name(HWDATA / "usb.ids", vendor, product)
+        info = {"vendor_id": vendor, "device_id": product, "interfaces": interfaces,
+                "says_it_is": " ".join(x for x in (read(sysfs / "manufacturer"), read(sysfs / "product")) if x) or None}
+    else:
+        vendor, product = read(sysfs / "vendor"), read(sysfs / "device")
+        aliases = [m for m in [read(sysfs / "modalias")] if m]
+        names = _id_name(HWDATA / "pci.ids", vendor, product)
+        drv = sysfs / "driver"
+        info = {"vendor_id": vendor, "device_id": product, "class": read(sysfs / "class"),
+                "driver": os.path.basename(os.readlink(drv)) if drv.is_symlink() else None}
+    modules = _kernel_modules_for(aliases)
+    loaded = [m for m in modules if (ROOT / "sys/module" / m.replace("-", "_")).exists()]
+    info.update(vendor=names[0], product=names[1], kernel_modules=modules, loaded_modules=loaded)
+    info["next_step"] = _next_step(info, modules, loaded)
+    return info
+
+
+def _next_step(info, modules, loaded):
+    label = " ".join(x for x in (info.get("vendor"), info.get("product"), info.get("says_it_is")) if x).lower()
+    if modules and not loaded:
+        return (f"A kernel driver exists but is not loaded: {', '.join(modules)}. An administrator can load it "
+                f"with `sudo modprobe {modules[0]}`.")
+    if modules:
+        return "Its kernel driver is loaded; if it still does not work, the logs tool may say why."
+    if "fingerprint" in label:
+        return ("A fingerprint reader: Linux drives these from user space (fprintd and libfprint). Try "
+                "`fprintd-list $USER`; if it is not supported, it is a candidate for KimiOS driver synthesis.")
+    if info.get("class") and str(info["class"]).startswith("0x05"):
+        return "A memory controller of the chipset: it needs no driver."
+    return ("No driver on this computer knows it. It is a candidate for a user-space driver written by KimiOS "
+            "(Phase 3): identify it, write and test a driver in a sandbox, then ask before using it.")
+
+
+# ------------------------------------------------------------------------------------------------- abilities (Phase 2b)
+KIMILM_DB = Path(os.environ.get("KIMIOS_KIMILM_DB", Path.home() / ".config/KimiLM/kimilm.sqlite3"))
+
+
+def _kimilm_rows(sql):
+    if not KIMILM_DB.exists():
+        return []
+    try:
+        con = sqlite3.connect(f"file:{KIMILM_DB}?mode=ro", uri=True, timeout=5)
+        con.row_factory = sqlite3.Row
+        try:
+            return [dict(r) for r in con.execute(sql)]
+        finally:
+            con.close()
+    except sqlite3.Error as exc:
+        log("kimilm database:", exc)
+        return []
+
+
+def _js(text, default):
+    try:
+        return json.loads(text) if text else default
+    except ValueError:
+        return default
+
+
+def tool_abilities():
+    """What this computer has shown it can do: measured, not guessed (KimiOS self-model, scope §2.5)."""
+    status = tool_system_status()
+    try:
+        hw = tool_machine("summary")
+    except ToolError:
+        hw = {}
+    models = []
+    for m in _kimilm_rows("SELECT id, name, size, quant, bench_json FROM models"):
+        bench = _js(m.get("bench_json"), {})
+        models.append({"id": m["id"], "name": m.get("name"), "size_gb": _gb(m.get("size")), "quant": m.get("quant"),
+                       "reads_per_second": bench.get("prompt_per_second"),
+                       "writes_per_second": bench.get("predicted_per_second"),
+                       "tuned_best": (bench.get("tune") or {}).get("best")})
+    evals = {}
+    for r in _kimilm_rows("SELECT model, created, version, status, summary_json FROM eval_runs "
+                          "WHERE status='done' ORDER BY created"):
+        s = _js(r.get("summary_json"), {})
+        if s.get("total"):
+            evals[r["model"]] = {"passed": s.get("passed"), "of": s.get("total"),
+                                 "minutes": round((s.get("seconds") or 0) / 60), "version": r.get("version"),
+                                 "when": r.get("created")}
+    for m in models:
+        m["evaluation"] = evals.get(m["id"])
+    scored = [m for m in models if m["evaluation"]]
+    best = None
+    if scored:
+        best = max(scored, key=lambda m: (m["evaluation"]["passed"] / m["evaluation"]["of"], -m["evaluation"]["minutes"]))
+    return {
+        "machine": hw.get("machine"), "capabilities": hw.get("capabilities"),
+        "memory": status["memory"], "kimilm_memory": status["kimilm_memory"], "power": status["power"],
+        "local_models": models,
+        "best_for_agent_work": best and {"model": best["id"], **best["evaluation"]},
+        "not_measured_yet": [m["id"] for m in models if not m["evaluation"]],
+        "note": "Speeds are tokens per second measured by KimiLM; evaluations are KimiLM's 12-task check. "
+                "A model not measured yet can be checked in KimiLM: Settings → Check this setup.",
+    }
 
 
 # ------------------------------------------------------------------------------------------------- status
@@ -421,6 +588,13 @@ TOOLS = {
                 _schema({"section": {"enum": ["summary", "devices", "unclaimed", "all"]}}), _ann(True)),
     "system_status": (tool_system_status, "Right now: memory free and used by KimiLM, CPU load, battery and "
                       "charger, temperatures, network, disk space, OS version.", _schema(), _ann(True)),
+    "device_inspect": (tool_device_inspect, "One device in depth (address from machine: a USB address such as 1-7 "
+                       "or a PCI one such as 0000:00:14.2): its names, interfaces, matching kernel drivers and what it "
+                       "would take to make it work. Without an address: every device that has no driver.",
+                       _schema({"address": S}), _ann(True)),
+    "abilities": (tool_abilities, "What this computer has shown it can do: its local models with measured speeds "
+                  "and evaluation scores, the best one for agent work, memory headroom and power. Use it before "
+                  "choosing a model or planning heavy work.", _schema(), _ann(True)),
     "os_status": (tool_os_status, "The KimiOS versions installed (running, staged, rollback) and how to update.",
                   _schema(), _ann(True)),
     "software": (tool_software, "Installed apps and what they are for, the file types they open, and (with "
