@@ -30,8 +30,8 @@ In the founder's words (20 Nov 2026, lightly edited):
 | Vision | Built as | Section | Phase |
 |---|---|---|---|
 | Natural language is the way in | The KimiOS session: KimiLM is the desktop; every other piece is reached through it | §2 Shell | 1 (done) |
-| Everything served through natural language | OS MCP server: files, apps, settings, network, devices as tools | §2 | 2 |
-| Knows what the installed tools can do | Software capability registry | §2.4 | 2 |
+| Everything served through natural language | OS MCP server: files, apps, settings, network, devices as tools | §2 | 2 (started) |
+| Knows what the installed tools can do | Software capability registry | §2.4 | 2 (started) |
 | Understands connected devices | Hardware capability graph; driver synthesis for what has no driver | §2.1, §2.2 | 0 (done), 3 |
 | Suggests ways of working | Suggestions from what the user does, local and opt-in | §2.6 | 2b |
 | Learns what it controls (robot, appliance) | Skill learning; KimiOS Edge for microcontrollers | §2.3 | 4 |
@@ -185,6 +185,15 @@ Found on the way: Fedora 45 ships OpenSSL 4, so KimiOS adds `openssl3-libs` (0.2
 - Installer ISO (interactive, never "install to the first disk").
 - Software capability registry (§2.4), read through the OS MCP server.
 
+**Started (20 Nov 2026), KimiOS 0.3.0:** `kimios-mcp`, an MCP server over stdio with no dependencies, offered to
+KimiLM as a system plugin (`/usr/share/kimilm/plugins/kimios`, read by KimiLM 2.23.0). Tools:
+look (`machine`, `system_status`, `os_status`, `software`, `drives`, `setting_get`, `logs`), act (`open`,
+`launch_app`, `notify`, `setting_set` on an allow-list, returning the old value; `mount_drive`; `app_install`),
+remove (`app_remove`). MCP annotations mark read-only and destructive tools; KimiLM's approval mode decides what
+asks first. The registry reads desktop entries (system, user, Flatpak) and, on request, matching commands.
+A polkit rule lets administrators mount internal drives without a password (KimiLM mounts the drive a model is on).
+Still to do: snapshots before risky actions, the installer ISO, richer registry entries (D-Bus, `--help`).
+
 ### Phase 2b — Self-model and suggestions
 
 - Self-model and bounded exploration (§2.5), starting from KimiLM's tuner and evaluation.
@@ -228,7 +237,9 @@ Keeping Windows alongside (dual boot) is recommended until KimiOS can do daily w
 Containerfile                 image definition
 build_files/build.sh          package installs and set-up inside the build
 system_files/                 files copied into / of the image
-  usr/libexec/kimios/         kimios-session, kimi-hwprobe
+  usr/libexec/kimios/         kimios-session, kimi-hwprobe, kimios-mcp (the tool server)
+  usr/share/kimilm/plugins/   the KimiOS plugin KimiLM loads (points at kimios-mcp)
+  usr/share/polkit-1/rules.d/ administrators mount internal drives without a password
   usr/share/wayland-sessions/ kimios.desktop
   usr/lib/systemd/            kimilm.slice (user), kimi-hwprobe.service (system)
   usr/lib/udev/rules.d/       re-probe on hot-plug

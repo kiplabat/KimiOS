@@ -1,0 +1,532 @@
+#!/usr/bin/env python3
+"""KimiOS tool server: lets agents (KimiLM, or any MCP client) see and act on this computer.
+
+An MCP server over stdio (newline-delimited JSON-RPC), standard library only. KimiLM finds it through the
+system plugin /usr/share/kimilm/plugins/kimios. docs/SCOPE.md §2 ("OS MCP server") and §2.4 (software registry).
+
+Tools, by how much they change (MCP annotations tell the client; the client decides what needs approval):
+  look      machine, system_status, software, drives, setting_get, logs, os_status
+  act       open, launch_app, notify, setting_set (allow-listed desktop settings; returns the old value),
+            mount_drive, app_install
+  remove    app_remove
+
+The protocol version is the one the client asks for: this server uses only initialize, tools/list, tools/call
+and ping, which have not changed between versions.
+"""
+from __future__ import annotations
+
+import configparser
+import json
+import os
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+VERSION = "0.3.0"
+ROOT = Path(os.environ.get("KIMIOS_ROOT", "/"))        # tests point this at a fake /sys and /proc
+HARDWARE_JSON = Path(os.environ.get("KIMIOS_HARDWARE_JSON", "/var/lib/kimios/hardware.json"))
+HWPROBE = "/usr/libexec/kimios/kimi-hwprobe"
+MAX_TEXT = 20_000
+
+# Desktop settings an agent may change: (schema, key) prefixes. Anything else is refused.
+SETTINGS_ALLOWED = (
+    ("org.gnome.desktop.interface", ("color-scheme", "text-scaling-factor", "clock-format", "show-battery-percentage",
+                                     "enable-animations", "font-name", "monospace-font-name")),
+    ("org.gnome.desktop.background", ("picture-uri", "picture-uri-dark", "picture-options", "primary-color")),
+    ("org.gnome.desktop.session", ("idle-delay",)),
+    ("org.gnome.desktop.notifications", ("show-banners", "show-in-lock-screen")),
+    ("org.gnome.settings-daemon.plugins.color", ("night-light-enabled", "night-light-temperature",
+                                                 "night-light-schedule-automatic")),
+    ("org.gnome.settings-daemon.plugins.power", ("sleep-inactive-ac-type", "sleep-inactive-battery-type",
+                                                 "sleep-inactive-ac-timeout", "sleep-inactive-battery-timeout",
+                                                 "power-button-action")),
+    ("org.gnome.desktop.peripherals.touchpad", ("tap-to-click", "natural-scroll", "speed", "two-finger-scrolling-enabled")),
+    ("org.gnome.desktop.peripherals.mouse", ("speed", "natural-scroll", "left-handed")),
+    ("org.gnome.desktop.input-sources", ("sources",)),
+    ("org.gnome.desktop.wm.preferences", ("button-layout",)),
+)
+
+
+def log(*parts):
+    print("kimios-mcp:", *parts, file=sys.stderr, flush=True)
+
+
+def run(cmd, timeout=20, input_text=None):
+    """(returncode, stdout, stderr); never raises for a missing program or a timeout."""
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, input=input_text)
+        return p.returncode, p.stdout, p.stderr
+    except FileNotFoundError:
+        return 127, "", f"{cmd[0]}: not installed"
+    except subprocess.TimeoutExpired:
+        return 124, "", f"{cmd[0]}: took longer than {timeout} s"
+
+
+def read(path, default=None):
+    try:
+        return Path(path).read_text(errors="replace").strip()
+    except OSError:
+        return default
+
+
+class ToolError(Exception):
+    """A failure the agent can act on: returned as isError with this message."""
+
+
+# ------------------------------------------------------------------------------------------------- machine
+def tool_machine(section="summary"):
+    data = None
+    if HARDWARE_JSON.exists():
+        try:
+            data = json.loads(HARDWARE_JSON.read_text())
+        except ValueError:
+            data = None
+    if data is None:
+        code, out, err = run([HWPROBE])
+        if code != 0:
+            raise ToolError(f"the hardware probe could not run: {err.strip()[:200]}")
+        data = json.loads(out)
+    if section == "all":
+        return data
+    if section == "devices":
+        return {"devices": data.get("devices", [])}
+    if section == "unclaimed":
+        return {"unclaimed": data.get("unclaimed", []),
+                "note": "Devices without a driver. KimiOS Phase 3 writes drivers for these."}
+    return {"machine": data.get("machine"), "capabilities": data.get("capabilities"),
+            "classes": data.get("classes"), "devices": len(data.get("devices", [])),
+            "unclaimed": len(data.get("unclaimed", [])), "probed_at": data.get("probed_at")}
+
+
+# ------------------------------------------------------------------------------------------------- status
+def _meminfo(root):
+    out = {}
+    for line in (read(root / "proc/meminfo", "") or "").splitlines():
+        k, _, v = line.partition(":")
+        parts = v.split()
+        if parts and parts[0].isdigit():
+            out[k] = int(parts[0]) * 1024
+    return out
+
+
+def _gb(n):
+    return None if n is None else round(n / 1024 ** 3, 2)
+
+
+def _power(root):
+    supplies = []
+    for d in sorted((root / "sys/class/power_supply").glob("*")):
+        kind = read(d / "type")
+        if kind == "Battery":
+            supplies.append({"name": d.name, "type": "battery", "percent": _int(read(d / "capacity")),
+                             "status": read(d / "status")})
+        elif kind == "Mains":
+            supplies.append({"name": d.name, "type": "mains", "online": read(d / "online") == "1"})
+    return supplies
+
+
+def _int(v):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _temperatures(root):
+    temps = []
+    for z in sorted((root / "sys/class/thermal").glob("thermal_zone*")):
+        t = _int(read(z / "temp"))
+        if t is not None:
+            temps.append({"zone": read(z / "type") or z.name, "celsius": round(t / 1000, 1)})
+    return temps
+
+
+def _network(root):
+    nets = []
+    for n in sorted((root / "sys/class/net").glob("*")):
+        if n.name == "lo":
+            continue
+        nets.append({"name": n.name, "state": read(n / "operstate"), "wireless": (n / "wireless").exists()})
+    return nets
+
+
+def _kimilm_slice(root):
+    uid = os.getuid()
+    base = root / f"sys/fs/cgroup/user.slice/user-{uid}.slice/user@{uid}.service/kimilm.slice"
+    if not base.exists():
+        return None
+
+    def num(name):
+        v = read(base / name)
+        return None if v in (None, "max") else _int(v)
+    return {"memory_gb": _gb(num("memory.current")), "high_gb": _gb(num("memory.high")), "max_gb": _gb(num("memory.max"))}
+
+
+def _disks():
+    out = []
+    for mount in ("/", "/var", "/var/home"):
+        try:
+            st = os.statvfs(mount)
+        except OSError:
+            continue
+        out.append({"mount": mount, "size_gb": _gb(st.f_blocks * st.f_frsize), "free_gb": _gb(st.f_bavail * st.f_frsize)})
+    return out
+
+
+def tool_system_status():
+    root = ROOT
+    mem = _meminfo(root)
+    load = (read(root / "proc/loadavg", "") or "").split()[:3]
+    uptime = (read(root / "proc/uptime", "") or "0").split()[0]
+    os_release = dict(line.split("=", 1) for line in (read(root / "etc/os-release", "") or "").splitlines() if "=" in line)
+    return {
+        "os": os_release.get("PRETTY_NAME", "").strip('"'),
+        "memory": {"total_gb": _gb(mem.get("MemTotal")), "available_gb": _gb(mem.get("MemAvailable")),
+                   "swap_free_gb": _gb(mem.get("SwapFree"))},
+        "kimilm_memory": _kimilm_slice(root),
+        "load_average": [float(x) for x in load] if load else None,
+        "cpu_threads": os.cpu_count(),
+        "uptime_hours": round(float(uptime) / 3600, 1),
+        "power": _power(root),
+        "temperatures": _temperatures(root)[:8],
+        "network": _network(root),
+        "disks": _disks(),
+    }
+
+
+def tool_os_status():
+    code, out, err = run(["rpm-ostree", "status", "--json"])
+    if code != 0:
+        raise ToolError(f"rpm-ostree status failed: {err.strip()[:200]}")
+    data = json.loads(out)
+    deps = []
+    for d in data.get("deployments", []):
+        deps.append({"booted": d.get("booted", False), "image": d.get("container-image-reference") or d.get("origin"),
+                     "version": d.get("version"), "timestamp": d.get("timestamp"), "staged": d.get("staged", False),
+                     "pinned": d.get("pinned", False)})
+    return {"deployments": deps,
+            "how_to_update": "Run `sudo bootc upgrade` and restart. `sudo bootc rollback` returns to the previous version."}
+
+
+# ------------------------------------------------------------------------------------------------- software
+def _data_dirs():
+    home = Path(os.environ.get("HOME", "~")).expanduser()
+    dirs = [Path(os.environ.get("XDG_DATA_HOME", home / ".local/share"))]
+    dirs += [Path(p) for p in os.environ.get("XDG_DATA_DIRS", "/usr/local/share:/usr/share").split(":") if p]
+    dirs += [home / ".local/share/flatpak/exports/share", Path("/var/lib/flatpak/exports/share")]
+    seen, out = set(), []
+    for d in dirs:
+        if str(d) not in seen:
+            seen.add(str(d))
+            out.append(d)
+    return out
+
+
+def desktop_entries(dirs=None):
+    """Installed applications from their desktop entries: what each one is for and what it opens."""
+    apps = {}
+    for d in dirs or _data_dirs():
+        folder = d / "applications"
+        if not folder.is_dir():
+            continue
+        for f in sorted(folder.rglob("*.desktop")):
+            app_id = str(f.relative_to(folder)).replace("/", "-")
+            if app_id in apps:
+                continue                                  # the first data folder wins, as in the desktop
+            cp = configparser.RawConfigParser(strict=False, interpolation=None)
+            cp.optionxform = str
+            try:
+                cp.read(f, encoding="utf-8")
+                e = cp["Desktop Entry"]
+            except (configparser.Error, KeyError, UnicodeDecodeError):
+                continue
+            if e.get("Type", "Application") != "Application" or e.get("NoDisplay") == "true" or e.get("Hidden") == "true":
+                continue
+            split = lambda v: [x for x in (v or "").split(";") if x]  # noqa: E731
+            apps[app_id] = {
+                "id": app_id, "name": e.get("Name", app_id), "about": e.get("Comment") or e.get("GenericName") or "",
+                "categories": split(e.get("Categories")), "keywords": split(e.get("Keywords")),
+                "opens": split(e.get("MimeType"))[:12], "actions": split(e.get("Actions")),
+                "flatpak": "flatpak" in str(f) or "X-Flatpak" in e,
+            }
+    return list(apps.values())
+
+
+def tool_software(query="", limit=25, commands=False):
+    q = (query or "").lower().strip()
+    apps = desktop_entries()
+
+    def hit(a):
+        text = " ".join([a["name"], a["about"], a["id"], *a["categories"], *a["keywords"], *a["opens"]]).lower()
+        return all(word in text for word in q.split())
+    found = [a for a in apps if not q or hit(a)]
+    result = {"apps": found[:max(1, min(int(limit or 25), 100))], "apps_total": len(apps), "matched": len(found)}
+    if commands and q:
+        cmds = set()
+        for p in os.environ.get("PATH", "/usr/bin").split(":"):
+            try:
+                cmds.update(n for n in os.listdir(p) if q in n.lower() and os.access(os.path.join(p, n), os.X_OK))
+            except OSError:
+                pass
+        result["commands"] = sorted(cmds)[:50]
+    result["how_to_use"] = "launch_app with an app's id; open a file with `open` and the default app is chosen."
+    return result
+
+
+def tool_launch_app(app_id):
+    if not app_id or "/" in app_id:
+        raise ToolError("give the id of an installed app (from the software tool)")
+    name = app_id[:-8] if app_id.endswith(".desktop") else app_id
+    if not any(a["id"] in (app_id, name + ".desktop") for a in desktop_entries()):
+        raise ToolError(f"no installed app has the id {app_id!r}; search with the software tool")
+    code, _, err = run(["gtk-launch", name], timeout=15)
+    if code != 0:
+        raise ToolError(f"could not start {app_id}: {err.strip()[:200]}")
+    return {"started": app_id}
+
+
+def tool_open(target):
+    if not target:
+        raise ToolError("give a file, folder or web address")
+    if "://" not in target and not Path(target).expanduser().exists():
+        raise ToolError(f"{target} does not exist")
+    code, _, err = run(["gio", "open", str(Path(target).expanduser()) if "://" not in target else target], timeout=15)
+    if code != 0:
+        raise ToolError(f"could not open it: {err.strip()[:200]}")
+    return {"opened": target}
+
+
+# ------------------------------------------------------------------------------------------------- settings
+def _allowed(schema, key):
+    for s, keys in SETTINGS_ALLOWED:
+        if schema == s or schema.startswith(s + ":"):
+            return key in keys
+    return False
+
+
+def tool_setting_get(schema, key):
+    code, out, err = run(["gsettings", "get", schema, key])
+    if code != 0:
+        raise ToolError(err.strip()[:200] or "no such setting")
+    return {"schema": schema, "key": key, "value": out.strip()}
+
+
+def tool_setting_set(schema, key, value):
+    if not _allowed(schema, key):
+        allowed = "; ".join(f"{s}: {', '.join(k)}" for s, k in SETTINGS_ALLOWED)
+        raise ToolError(f"{schema} {key} is not a setting agents may change. Allowed: {allowed}")
+    old = tool_setting_get(schema, key)["value"]
+    code, _, err = run(["gsettings", "set", schema, key, str(value)])
+    if code != 0:
+        raise ToolError(err.strip()[:200] or "the value was refused")
+    return {"schema": schema, "key": key, "old": old, "new": tool_setting_get(schema, key)["value"],
+            "undo": f"setting_set {schema} {key} {old}"}
+
+
+# ------------------------------------------------------------------------------------------------- drives
+def tool_drives():
+    code, out, err = run(["lsblk", "-J", "-o", "PATH,LABEL,SIZE,FSTYPE,MOUNTPOINT,TYPE,RM"])
+    if code != 0:
+        raise ToolError(err.strip()[:200])
+    found = []
+
+    def walk(nodes):
+        for n in nodes or []:
+            if n.get("type") in ("part", "crypt", "disk") and n.get("fstype"):
+                found.append({"device": n.get("path"), "label": n.get("label"), "size": n.get("size"),
+                              "filesystem": n.get("fstype"), "mounted_at": n.get("mountpoint"),
+                              "removable": bool(n.get("rm"))})
+            walk(n.get("children"))
+    walk(json.loads(out).get("blockdevices"))
+    return {"drives": found}
+
+
+def tool_mount_drive(label):
+    drive = next((d for d in tool_drives()["drives"] if d["label"] == label), None)
+    if not drive:
+        raise ToolError(f"no drive is labelled {label!r}; list them with the drives tool")
+    if drive["mounted_at"]:
+        return {"label": label, "mounted_at": drive["mounted_at"], "note": "already mounted"}
+    code, out, err = run(["udisksctl", "mount", "-b", drive["device"]], timeout=90)
+    if code != 0:
+        raise ToolError(err.strip()[:200] or "could not mount it")
+    return {"label": label, "result": out.strip()}
+
+
+# ------------------------------------------------------------------------------------------------- logs, notify
+def tool_logs(scope="user", unit="", lines=50, priority="warning"):
+    lines = max(1, min(int(lines or 50), 300))
+    cmd = ["journalctl", "--no-pager", "-o", "short-iso", "-n", str(lines)]
+    if scope == "user":
+        cmd.append("--user")
+    if unit:
+        cmd += ["-u", unit] if scope != "user" else ["--user-unit", unit]
+    if priority:
+        cmd += ["-p", priority]
+    code, out, err = run(cmd, timeout=20)
+    if code != 0 and not out:
+        raise ToolError(err.strip()[:200])
+    return {"lines": out.splitlines()[-lines:]}
+
+
+def _gv(text):
+    """A GVariant string literal, so gdbus never reads a title such as "true" as another type."""
+    return "'" + str(text).replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+def tool_notify(title, body=""):
+    code, _, err = run(["gdbus", "call", "--session", "--dest", "org.freedesktop.Notifications",
+                        "--object-path", "/org/freedesktop/Notifications", "--method",
+                        "org.freedesktop.Notifications.Notify", _gv("KimiOS"), "0", _gv("kimilm"), _gv(title),
+                        _gv(body), "[]", "{}", "-1"])
+    if code != 0:
+        raise ToolError(err.strip()[:200] or "no notification service")
+    return {"shown": title}
+
+
+# ------------------------------------------------------------------------------------------------- apps (Flatpak)
+def tool_app_install(app_id):
+    if not app_id or " " in app_id:
+        raise ToolError("give a Flathub app id, such as org.gimp.GIMP")
+    code, out, err = run(["flatpak", "install", "--user", "-y", "--noninteractive", "flathub", app_id], timeout=1800)
+    if code != 0:
+        raise ToolError((err or out).strip()[-400:])
+    return {"installed": app_id}
+
+
+def tool_app_remove(app_id):
+    code, out, err = run(["flatpak", "uninstall", "--user", "-y", "--noninteractive", app_id], timeout=600)
+    if code != 0:
+        raise ToolError((err or out).strip()[-400:])
+    return {"removed": app_id}
+
+
+# ------------------------------------------------------------------------------------------------- the tool list
+def _schema(props=None, required=()):
+    return {"type": "object", "properties": props or {}, "required": list(required), "additionalProperties": False}
+
+
+def _ann(read_only, destructive=False, open_world=False):
+    return {"readOnlyHint": read_only, "destructiveHint": destructive, "openWorldHint": open_world,
+            "idempotentHint": read_only}
+
+
+S = {"type": "string"}
+TOOLS = {
+    "machine": (tool_machine, "This computer's hardware: model, CPU, memory, capabilities (gpu, camera, audio, "
+                "sensors…) and devices, including those without a driver. section: summary (default), devices, "
+                "unclaimed or all.",
+                _schema({"section": {"enum": ["summary", "devices", "unclaimed", "all"]}}), _ann(True)),
+    "system_status": (tool_system_status, "Right now: memory free and used by KimiLM, CPU load, battery and "
+                      "charger, temperatures, network, disk space, OS version.", _schema(), _ann(True)),
+    "os_status": (tool_os_status, "The KimiOS versions installed (running, staged, rollback) and how to update.",
+                  _schema(), _ann(True)),
+    "software": (tool_software, "Installed apps and what they are for, the file types they open, and (with "
+                 "commands=true) command-line tools matching the query. Ask this first to find the right tool.",
+                 _schema({"query": S, "limit": {"type": "integer"}, "commands": {"type": "boolean"}}), _ann(True)),
+    "drives": (tool_drives, "Drives and partitions with their labels, sizes, file systems and where they are mounted.",
+               _schema(), _ann(True)),
+    "setting_get": (tool_setting_get, "Read a desktop setting (gsettings schema and key).",
+                    _schema({"schema": S, "key": S}, ("schema", "key")), _ann(True)),
+    "logs": (tool_logs, "Recent system or user log lines (journal). scope: user or system; unit: a service name; "
+             "priority: err, warning, info…", _schema({"scope": {"enum": ["user", "system"]}, "unit": S,
+                                                        "lines": {"type": "integer"}, "priority": S}), _ann(True)),
+    "open": (tool_open, "Open a file, folder or web address with its default app.",
+             _schema({"target": S}, ("target",)), _ann(False)),
+    "launch_app": (tool_launch_app, "Start an installed app by its id (from the software tool).",
+                   _schema({"app_id": S}, ("app_id",)), _ann(False)),
+    "notify": (tool_notify, "Show a desktop notification.", _schema({"title": S, "body": S}, ("title",)), _ann(False)),
+    "setting_set": (tool_setting_set, "Change an allowed desktop setting (dark mode, text size, night light, "
+                    "touchpad, power, keyboard layouts…). Returns the old value so it can be undone.",
+                    _schema({"schema": S, "key": S, "value": S}, ("schema", "key", "value")), _ann(False)),
+    "mount_drive": (tool_mount_drive, "Mount a drive by its label (from the drives tool), as the file manager does.",
+                    _schema({"label": S}, ("label",)), _ann(False)),
+    "app_install": (tool_app_install, "Install an app from Flathub for this user (by its app id).",
+                    _schema({"app_id": S}, ("app_id",)), _ann(False, open_world=True)),
+    "app_remove": (tool_app_remove, "Remove an app installed from Flathub for this user.",
+                   _schema({"app_id": S}, ("app_id",)), _ann(False, destructive=True)),
+}
+
+INSTRUCTIONS = ("KimiOS is the operating system this agent runs on. Use these tools to learn what the computer is "
+                "and what is installed before guessing or searching the web: `software` for apps and tools, "
+                "`machine` for hardware, `system_status` for memory, power and network. Prefer reversible actions; "
+                "`setting_set` returns the old value.")
+
+
+# ------------------------------------------------------------------------------------------------- protocol
+def handle(msg):
+    """One JSON-RPC message in, the reply out (None for notifications)."""
+    method, mid = msg.get("method"), msg.get("id")
+    if mid is None:
+        return None                                       # notifications: initialized, cancelled…
+    try:
+        if method == "initialize":
+            params = msg.get("params") or {}
+            result = {"protocolVersion": params.get("protocolVersion") or "2025-06-18",
+                      "capabilities": {"tools": {"listChanged": False}},
+                      "serverInfo": {"name": "kimios", "title": "KimiOS", "version": VERSION},
+                      "instructions": INSTRUCTIONS}
+        elif method == "ping":
+            result = {}
+        elif method == "tools/list":
+            result = {"tools": [{"name": n, "description": d, "inputSchema": s, "annotations": a}
+                                for n, (_, d, s, a) in TOOLS.items()]}
+        elif method == "tools/call":
+            params = msg.get("params") or {}
+            name, args = params.get("name"), params.get("arguments") or {}
+            if name not in TOOLS:
+                return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32602, "message": f"Unknown tool: {name}"}}
+            result = call(name, args)
+        else:
+            return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": f"Method not found: {method}"}}
+        return {"jsonrpc": "2.0", "id": mid, "result": result}
+    except Exception as exc:                              # a bug here must not end the server
+        log("error:", method, repr(exc))
+        return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32603, "message": str(exc)[:300]}}
+
+
+def call(name, args):
+    fn, _, schema, _ = TOOLS[name]
+    allowed = set(schema["properties"])
+    unknown = set(args) - allowed
+    if unknown:
+        return _text(f"Unknown arguments: {', '.join(sorted(unknown))}", error=True)
+    missing = [k for k in schema["required"] if k not in args]
+    if missing:
+        return _text(f"Missing arguments: {', '.join(missing)}", error=True)
+    started = time.monotonic()
+    try:
+        data = fn(**args)
+    except ToolError as exc:
+        return _text(str(exc), error=True)
+    log(name, f"{time.monotonic() - started:.2f}s")
+    text = json.dumps(data, ensure_ascii=False)
+    if len(text) > MAX_TEXT:
+        text = text[:MAX_TEXT] + " …(cut; ask for less, e.g. a query or a section)"
+    return {"content": [{"type": "text", "text": text}], "structuredContent": data, "isError": False}
+
+
+def _text(message, error=False):
+    return {"content": [{"type": "text", "text": message}], "isError": error}
+
+
+def main():
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            msg = json.loads(line)
+        except ValueError:
+            reply = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error"}}
+        else:
+            reply = [r for r in map(handle, msg) if r] if isinstance(msg, list) else handle(msg)
+        if reply:
+            sys.stdout.write(json.dumps(reply) + "\n")
+            sys.stdout.flush()
+
+
+if __name__ == "__main__":
+    main()

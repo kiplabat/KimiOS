@@ -16,7 +16,7 @@ else
   rpm-ostree install --idempotent "${PACKAGES[@]}"
 fi
 
-chmod 0755 /usr/libexec/kimios/kimios-session /usr/libexec/kimios/kimi-hwprobe
+chmod 0755 /usr/libexec/kimios/kimios-session /usr/libexec/kimios/kimi-hwprobe /usr/libexec/kimios/kimios-mcp
 
 # KimiLM (docs/SCOPE.md Phase 1): the Linux build from KimiLM's GitHub releases.
 # Before the first release exists (HTTP 404) the image is built without it and the session opens GNOME.

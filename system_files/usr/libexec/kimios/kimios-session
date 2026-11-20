@@ -5,6 +5,8 @@
 set -u
 
 if [[ -x /usr/bin/kimilm ]] && command -v cage >/dev/null 2>&1; then
+  # KimiLM knows it is the whole desktop: no tray, and closing it logs out (KimiLM 2.23.0)
+  export KIMIOS_SESSION=1
   exec systemd-run --user --scope --quiet --collect \
     --slice=kimilm.slice --unit="kimios-session-$$" \
     cage -d -- /usr/bin/kimilm --ozone-platform=wayland
