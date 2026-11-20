@@ -10,7 +10,7 @@
     "KimiOS": {
       "command": "/usr/libexec/kimios/kimios-mcp",
       "args": [],
-      "description": "See and act on this computer: hardware, installed software, settings, drives, logs, system status."
+      "description": "See and act on this computer: hardware, installed software, settings, drives, logs, system status, and tuning and simulating controllers for devices (PI, on/off)."
     }
   }
 }
