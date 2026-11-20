@@ -5,6 +5,7 @@ set -euo pipefail
 PACKAGES=(
   cage            # kiosk Wayland compositor for the KimiOS session
   python3         # kimi-hwprobe (standard library only)
+  openssl3-libs   # libssl.so.3 for KimiLM's llama.cpp builds (Fedora 45's own OpenSSL is 4.0, libssl.so.4)
   usbutils pciutils i2c-tools libgpiod-utils   # device inspection for agents
 )
 
