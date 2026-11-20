@@ -1,0 +1,27 @@
+[Unit]
+Description=KimiOS telemetry (GPU busy time, power, fans, throttling) for KimiLM's Performance window
+Documentation=https://github.com/kiplabat/KimiOS/blob/main/docs/SCOPE.md
+
+[Service]
+# Reads /sys once a second and writes /run/kimios/telemetry.json (world-readable). Root, because RAPL energy
+# counters are root-only; CAP_PERFMON, for the i915 busy-time counters. Nothing else.
+ExecStart=/usr/libexec/kimios/kimi-telemetry --output /run/kimios/telemetry.json --interval 1
+Restart=on-failure
+RestartSec=5
+RuntimeDirectory=kimios
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+CapabilityBoundingSet=CAP_PERFMON
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateNetwork=yes
+PrivateTmp=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+Nice=10
+CPUQuota=5%
+
+[Install]
+WantedBy=multi-user.target
