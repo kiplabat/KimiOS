@@ -22,6 +22,16 @@ sudo systemctl reboot
 
 Choose the **KimiOS** session on the login screen. To go back: `sudo bootc rollback`.
 
+KimiLM's **Performance** window shows the computer's use live (processor, graphics, memory, network, disks,
+temperatures, power). On KimiOS the `kimi-telemetry` service adds what only the system can read and writes it to
+`/run/kimios/telemetry.json` once a second: how busy an Intel GPU really is (its i915 counters, not just its clock),
+processor and graphics power from RAPL, fans, slowing down for heat, and KimiLM's memory slice. To look yourself:
+
+```bash
+/usr/libexec/kimios/kimi-telemetry --once        # as root for power and GPU busy time
+systemctl status kimi-telemetry
+```
+
 See what KimiOS found on the machine:
 
 ```bash
@@ -32,7 +42,7 @@ cat /var/lib/kimios/hardware.json
 
 KimiLM connects to `kimios-mcp`, KimiOS's tool server, by itself (Plugins & connectors → KimiOS). Agents can
 then look up the hardware (and what any device without a driver would need), what the machine has shown it can
-do (its models' measured speeds and scores), the installed apps and what they open, memory, battery, temperatures, network and
+do (its models' measured speeds and scores), how busy it is right now (processor, graphics, watts, heat), the installed apps and what they open, memory, battery, temperatures, network and
 disks, drives, logs and the installed KimiOS versions; and, with your approval where KimiLM asks for it, open
 files and apps, change allowed desktop settings (each change reports the old value), mount drives, show
 notifications and install or remove Flathub apps. For devices that heat, cool or move, agents can learn how a

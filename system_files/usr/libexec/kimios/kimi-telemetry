@@ -1,0 +1,318 @@
+#!/usr/bin/env python3
+"""KimiOS telemetry: what only the system can read, once a second, for KimiLM's Performance window.
+
+KimiLM reads the processor, memory, network and disks itself. A user program cannot read:
+  - how busy an Intel GPU is (its i915 performance counters need CAP_PERFMON; without them only the clock is seen),
+  - processor and graphics power from RAPL (energy_uj is readable by root only since Linux 5.10),
+and it is simpler to read here, once for everyone:
+  - fans, slowing down for heat (thermal throttle counters), the CPU package temperature,
+  - KimiLM's memory slice (kimilm.slice: in use, high and max), battery draw.
+
+Writes /run/kimios/telemetry.json (atomically, world-readable) every interval. Standard library only. It reads,
+never writes, anything under /sys.
+
+Usage: kimi-telemetry [--root /] [--output FILE] [--interval 1.0] [--once]
+"""
+from __future__ import annotations
+
+import argparse
+import ctypes
+import json
+import os
+import platform
+import struct
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+SCHEMA = 1
+PERF_SYSCALL = {"x86_64": 298, "aarch64": 241, "i386": 336, "i686": 336}
+
+
+def read(path, default=None):
+    try:
+        return Path(path).read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return default
+
+
+def num(v):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+# ------------------------------------------------------------------------------------------------ RAPL power
+class Rapl:
+    """Energy counters of the processor package and its parts (core, uncore = integrated graphics, dram).
+    Watts = energy used since the last reading / time, with the counter's wrap-around handled."""
+
+    def __init__(self, root):
+        self.zones = {}
+        for z in sorted((root / "sys/class/powercap").glob("intel-rapl:*")):
+            name = read(z / "name")
+            if not name or not (z / "energy_uj").exists():
+                continue
+            key = {"core": "core", "uncore": "gpu", "dram": "dram"}.get(name, "package" if name.startswith("package") else None)
+            if key is None:
+                continue
+            self.zones.setdefault(key, []).append((z, num(read(z / "max_energy_range_uj")) or 2 ** 32))
+        self.last = {}
+
+    def watts(self, now):
+        out = {}
+        for key, zones in self.zones.items():
+            total = 0.0
+            seen = False
+            for z, wrap in zones:
+                e = num(read(z / "energy_uj"))
+                if e is None:
+                    continue
+                prev = self.last.get(str(z))
+                self.last[str(z)] = (e, now)
+                if prev is None:
+                    continue
+                d = e - prev[0]
+                if d < 0:
+                    d += wrap
+                dt = now - prev[1]
+                if dt > 0:
+                    total += d / 1e6 / dt
+                    seen = True
+            if seen:
+                out[key] = round(total, 2)
+        return out
+
+
+# ------------------------------------------------------------------------------------------------ i915 busy time
+class PerfCounter:
+    """One system-wide perf counter of a PMU (e.g. i915 rcs0-busy: nanoseconds the render engine was busy)."""
+
+    def __init__(self, pmu_dir: Path, event: str):
+        self.fd = None
+        nr = PERF_SYSCALL.get(platform.machine())
+        spec = read(pmu_dir / "events" / event)
+        pmu_type = num(read(pmu_dir / "type"))
+        if nr is None or not spec or pmu_type is None:
+            return
+        config = 0
+        for part in spec.split(","):
+            k, _, v = part.partition("=")
+            if k.strip() == "config":
+                config = int(v, 0)
+        cpu = 0
+        mask = read(pmu_dir / "cpumask")
+        if mask:
+            cpu = int(mask.split(",")[0].split("-")[0])
+        # struct perf_event_attr, PERF_ATTR_SIZE_VER0 (64 bytes): type, size, config, sample_period, sample_type,
+        # read_format, flags (0: enabled, counting), wakeup_events, bp_type, config1
+        attr = struct.pack("<IIQQQQQIIQ", pmu_type, 64, config, 0, 0, 0, 0, 0, 0, 0)
+        buf = ctypes.create_string_buffer(attr, 64)
+        libc = ctypes.CDLL(None, use_errno=True)
+        libc.syscall.restype = ctypes.c_long
+        fd = libc.syscall(ctypes.c_long(nr), buf, ctypes.c_int(-1), ctypes.c_int(cpu), ctypes.c_int(-1),
+                          ctypes.c_ulong(0))
+        if fd >= 0:
+            self.fd = int(fd)
+        self.last = None
+
+    def busy_percent(self, now):
+        if self.fd is None:
+            return None
+        try:
+            value = struct.unpack("<Q", os.read(self.fd, 8))[0]
+        except OSError:
+            return None
+        prev, self.last = self.last, (value, now)
+        if prev is None or now <= prev[1]:
+            return None
+        return round(min(100.0, max(0.0, 100.0 * (value - prev[0]) / ((now - prev[1]) * 1e9))), 1)
+
+
+class Gpus:
+    def __init__(self, root):
+        self.root = root
+        self.cards = []
+        for card in sorted((root / "sys/class/drm").glob("card[0-9]")):
+            dev = card / "device"
+            driver = os.path.basename(os.path.realpath(dev / "driver")) if (dev / "driver").exists() else ""
+            entry = {"card": card.name, "driver": driver, "dir": card, "dev": dev, "counters": []}
+            if driver == "i915":
+                pmu = self._pmu(dev)
+                if pmu is not None:
+                    for ev in ("rcs0-busy", "ccs0-busy"):
+                        if (pmu / "events" / ev).exists():
+                            c = PerfCounter(pmu, ev)
+                            if c.fd is not None:
+                                entry["counters"].append(c)
+            self.cards.append(entry)
+
+    def _pmu(self, dev):
+        base = self.root / "sys/bus/event_source/devices"
+        slot = os.path.basename(os.path.realpath(dev))
+        for name in (f"i915_{slot.replace(':', '_')}", "i915"):     # discrete cards get their own PMU name
+            if (base / name / "type").exists():
+                return base / name
+        return None
+
+    def read(self, now):
+        out = []
+        for c in self.cards:
+            g = {"card": c["card"], "driver": c["driver"]}
+            busy = [x.busy_percent(now) for x in c["counters"]]
+            busy = [b for b in busy if b is not None]
+            if busy:
+                g["util"], g["source"] = max(busy), "pmu"
+            else:
+                b = read(c["dev"] / "gpu_busy_percent")
+                if b is not None and num(b) is not None:
+                    g["util"], g["source"] = float(b), "sysfs"
+            act = read(c["dir"] / "gt_act_freq_mhz")
+            top = read(c["dir"] / "gt_RP0_freq_mhz") or read(c["dir"] / "gt_max_freq_mhz")
+            if act and top and num(top):
+                g["clock_mhz"], g["clock_pct"] = num(act), round(100 * num(act) / num(top), 1)
+            for hw in (c["dev"] / "hwmon").glob("hwmon*"):
+                t = num(read(hw / "temp1_input"))
+                if t:
+                    g["temp"] = round(t / 1000, 1)
+                p = num(read(hw / "power1_average")) or num(read(hw / "power1_input"))
+                if p:
+                    g["power_w"] = round(p / 1e6, 2)
+            used, total = num(read(c["dev"] / "mem_info_vram_used")), num(read(c["dev"] / "mem_info_vram_total"))
+            if used is not None and total:
+                g["mem_used_mb"], g["mem_total_mb"] = used // 2 ** 20, total // 2 ** 20
+            if len(g) > 2:
+                out.append(g)
+        return out
+
+
+# ------------------------------------------------------------------------------------------------ the rest
+def hwmon(root):
+    fans, cpu_temp = [], None
+    for hw in sorted((root / "sys/class/hwmon").glob("hwmon*")):
+        name = read(hw / "name") or ""
+        for f in hw.glob("fan*_input"):
+            v = num(read(f))
+            if v is not None:
+                fans.append(v)
+        if name in ("coretemp", "k10temp", "zenpower") and cpu_temp is None:
+            temps = []
+            for t in sorted(hw.glob("temp*_input")):
+                label = (read(t.with_name(t.name.replace("_input", "_label"))) or "").lower()
+                v = num(read(t))
+                if v is None:
+                    continue
+                if "package" in label or label in ("tctl", "tdie"):
+                    cpu_temp = round(v / 1000, 1)
+                    break
+                temps.append(v)
+            if cpu_temp is None and temps:
+                cpu_temp = round(max(temps) / 1000, 1)
+    return fans, cpu_temp
+
+
+class Throttle:
+    def __init__(self, root):
+        self.files = sorted((root / "sys/devices/system/cpu").glob("cpu[0-9]*/thermal_throttle/package_throttle_count"))
+        self.last = None
+        self.until = 0.0
+
+    def check(self, now):
+        total = sum(num(read(f)) or 0 for f in self.files)
+        if self.last is not None and total > self.last:
+            self.until = now + 10                      # say so for ten seconds after it happens
+        self.last = total
+        return now < self.until if self.files else None
+
+
+def kimilm_slice(root):
+    best = None
+    for sl in (root / "sys/fs/cgroup/user.slice").glob("user-*.slice/user@*.service/kimilm.slice"):
+        cur = num(read(sl / "memory.current"))
+        if cur is None:
+            continue
+        mb = lambda n: None if n is None else n // 2 ** 20
+        row = {"slice_mem_mb": mb(cur), "slice_high_mb": mb(num(read(sl / "memory.high"))),
+               "slice_max_mb": mb(num(read(sl / "memory.max")))}
+        if best is None or row["slice_mem_mb"] > best["slice_mem_mb"]:
+            best = row
+    return best or {}
+
+
+def battery_watts(root):
+    for bat in sorted((root / "sys/class/power_supply").glob("BAT*")):
+        if read(bat / "status") != "Discharging":
+            continue
+        p = num(read(bat / "power_now"))
+        if p is None:
+            c, v = num(read(bat / "current_now")), num(read(bat / "voltage_now"))
+            p = c * v // 10 ** 6 if c is not None and v is not None else None
+        if p:
+            return round(p / 1e6, 2)
+    return None
+
+
+class Sampler:
+    def __init__(self, root):
+        self.root = root
+        self.rapl = Rapl(root)
+        self.gpus = Gpus(root)
+        self.throttle = Throttle(root)
+
+    def sample(self, now=None):
+        now = now if now is not None else time.monotonic()
+        out = {"schema": SCHEMA, "t": round(time.time(), 3)}
+        w = self.rapl.watts(now)
+        out["power_cpu_w"] = w.get("package")
+        out["power_gpu_w"] = w.get("gpu")
+        out["power_dram_w"] = w.get("dram")
+        out["gpus"] = self.gpus.read(now)
+        fans, cpu_temp = hwmon(self.root)
+        out["fan_rpm"] = max(fans) if fans else None
+        out["temp_cpu"] = cpu_temp
+        out["throttled"] = self.throttle.check(now)
+        out["power_w"] = battery_watts(self.root)
+        out.update(kimilm_slice(self.root))
+        return {k: v for k, v in out.items() if v is not None}
+
+
+def write(path: Path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".telemetry-")
+    with os.fdopen(fd, "w") as f:
+        json.dump(data, f)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, path)
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--root", default="/")
+    ap.add_argument("--output", default="/run/kimios/telemetry.json")
+    ap.add_argument("--interval", type=float, default=1.0)
+    ap.add_argument("--once", action="store_true", help="two readings one interval apart, then print and exit")
+    args = ap.parse_args(argv)
+    s = Sampler(Path(args.root))
+    if args.once:
+        s.sample()
+        time.sleep(args.interval)
+        print(json.dumps(s.sample(), indent=2))
+        return 0
+    out = Path(args.output)
+    next_at = time.monotonic()
+    while True:
+        try:
+            write(out, s.sample())
+        except Exception as exc:                        # keep going: a reading that failed once may work next time
+            print(f"kimi-telemetry: {type(exc).__name__}: {exc}", file=sys.stderr)
+        next_at += args.interval
+        delay = next_at - time.monotonic()
+        if delay < 0:
+            next_at, delay = time.monotonic(), args.interval
+        time.sleep(delay)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

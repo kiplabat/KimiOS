@@ -28,9 +28,10 @@ import sys
 import time
 from pathlib import Path
 
-VERSION = "0.4.0"
+VERSION = "0.6.0"
 ROOT = Path(os.environ.get("KIMIOS_ROOT", "/"))        # tests point this at a fake /sys and /proc
 HARDWARE_JSON = Path(os.environ.get("KIMIOS_HARDWARE_JSON", "/var/lib/kimios/hardware.json"))
+TELEMETRY_JSON = Path(os.environ.get("KIMIOS_TELEMETRY_JSON", "/run/kimios/telemetry.json"))   # kimi-telemetry (0.6.0)
 HWPROBE = "/usr/libexec/kimios/kimi-hwprobe"
 MAX_TEXT = 20_000
 
@@ -364,6 +365,44 @@ def tool_system_status():
     }
 
 
+def _cpu_times(root):
+    line = (read(root / "proc/stat", "") or "").splitlines()[:1]
+    parts = [int(x) for x in line[0].split()[1:]] if line and line[0].startswith("cpu ") else []
+    return (sum(parts), parts[3] + (parts[4] if len(parts) > 4 else 0)) if len(parts) >= 4 else None
+
+
+def tool_performance():
+    """How busy the computer is right now (0.6.0): processor measured over half a second, memory, and what the
+    kimi-telemetry service reads once a second (graphics busy time, power, fans, temperature, throttling)."""
+    root = ROOT
+    a = _cpu_times(root)
+    time.sleep(0.5)
+    b = _cpu_times(root)
+    cpu = None
+    if a and b and b[0] > a[0]:
+        cpu = round(100 * (1 - (b[1] - a[1]) / (b[0] - a[0])), 1)
+    mem = _meminfo(root)
+    out = {"cpu_percent": cpu, "load_average": [float(x) for x in (read(root / "proc/loadavg", "") or "").split()[:3]] or None,
+           "memory": {"total_gb": _gb(mem.get("MemTotal")), "available_gb": _gb(mem.get("MemAvailable"))},
+           "kimilm_memory": _kimilm_slice(root)}
+    try:
+        t = json.loads(TELEMETRY_JSON.read_text())
+        age = time.time() - float(t.get("t") or 0)
+        if age > 10:
+            out["telemetry"] = {"note": f"kimi-telemetry has not written for {int(age)} s (is the service running? "
+                                        "systemctl status kimi-telemetry)"}
+        else:
+            out["graphics"] = t.get("gpus") or []
+            out["power_watts"] = {k: t[k] for k in ("power_cpu_w", "power_gpu_w", "power_dram_w", "power_w") if k in t}
+            out["fan_rpm"] = t.get("fan_rpm")
+            out["cpu_temperature"] = t.get("temp_cpu")
+            out["slowed_by_heat"] = t.get("throttled")
+    except (OSError, ValueError):
+        out["telemetry"] = {"note": "kimi-telemetry is not running (systemctl status kimi-telemetry)"}
+    out["see_also"] = "KimiLM → Performance shows these live, with history; Usage shows the models' work over time."
+    return out
+
+
 def tool_os_status():
     code, out, err = run(["rpm-ostree", "status", "--json"])
     if code != 0:
@@ -619,6 +658,10 @@ TOOLS = {
                 _schema({"section": {"enum": ["summary", "devices", "unclaimed", "all"]}}), _ann(True)),
     "system_status": (tool_system_status, "Right now: memory free and used by KimiLM, CPU load, battery and "
                       "charger, temperatures, network, disk space, OS version.", _schema(), _ann(True)),
+    "performance": (tool_performance, "How busy the computer is right now: processor (measured), memory, graphics "
+                    "busy time, power in watts, fans, CPU temperature and whether it is slowing down for heat. Use it "
+                    "for 'why is it slow', 'what is using my computer' or before starting heavy work.", _schema(),
+                    _ann(True)),
     "device_inspect": (tool_device_inspect, "One device in depth (address from machine: a USB address such as 1-7 "
                        "or a PCI one such as 0000:00:14.2): its names, interfaces, matching kernel drivers and what it "
                        "would take to make it work. Without an address: every device that has no driver.",
@@ -681,7 +724,8 @@ TOOLS = {
 
 INSTRUCTIONS = ("KimiOS is the operating system this agent runs on. Use these tools to learn what the computer is "
                 "and what is installed before guessing or searching the web: `software` for apps and tools, "
-                "`machine` for hardware, `drives` for disks, `system_status` for memory, power and network. For "
+                "`machine` for hardware, `drives` for disks, `system_status` for memory, power and network, "
+                "`performance` for how busy the computer is right now (processor, graphics, watts, heat). For "
                 "anything that controls a device (heater, motor, fan, pump: PI/PID tuning, on/off with a band) use "
                 "`control_identify`, `control_tune` and `control_simulate` rather than writing your own code. "
                 "Prefer reversible actions; `setting_set` returns the old value.")

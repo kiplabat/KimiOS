@@ -118,6 +118,33 @@ class ToolTest(unittest.TestCase):
         self.assertEqual(s["network"], [{"name": "wlo1", "state": "up", "wireless": True}])
         self.assertEqual(s["kimilm_memory"], {"memory_gb": 16.0, "high_gb": None, "max_gb": 26.0})
 
+    def test_performance_measures_the_processor_and_reads_kimi_telemetry(self):
+        r = self.root
+        stats = iter(["cpu  100 0 100 800 0 0 0 0\n", "cpu  160 0 140 900 0 0 0 0\n"])
+        put(r / "proc/meminfo", "MemTotal:       33300000 kB\nMemAvailable:   20000000 kB\n")
+        put(r / "proc/loadavg", "2.00 1.00 0.50 2/900 1234\n")
+        tel = r / "run/kimios/telemetry.json"
+        put(tel, json.dumps({"t": __import__("time").time(), "gpus": [{"card": "card0", "util": 61.5, "source": "pmu"}],
+                             "power_cpu_w": 11.2, "fan_rpm": 2900, "temp_cpu": 78.0, "throttled": False}))
+        real_read = mcp.read
+
+        def fake_read(path, default=None):
+            if str(path).endswith("proc/stat"):
+                return next(stats)
+            return real_read(path, default)
+        with mock.patch.object(mcp, "ROOT", r), mock.patch.object(mcp, "TELEMETRY_JSON", tel), \
+                mock.patch.object(mcp, "read", fake_read), mock.patch.object(mcp.time, "sleep", lambda s: None):
+            out = mcp.tool_performance()
+        self.assertEqual(out["cpu_percent"], 50.0)            # 100 busy of 200 ticks
+        self.assertEqual(out["graphics"][0]["util"], 61.5)
+        self.assertEqual(out["power_watts"], {"power_cpu_w": 11.2})
+        self.assertEqual(out["fan_rpm"], 2900)
+        self.assertFalse(out["slowed_by_heat"])
+        put(tel, json.dumps({"t": 0}))
+        with mock.patch.object(mcp, "ROOT", r), mock.patch.object(mcp, "TELEMETRY_JSON", tel), \
+                mock.patch.object(mcp.time, "sleep", lambda s: None):
+            self.assertIn("has not written", mcp.tool_performance()["telemetry"]["note"])
+
     def test_software_registry_reads_desktop_entries(self):
         apps = self.root / "share/applications"
         put(apps / "org.gnome.TextEditor.desktop", "[Desktop Entry]\nType=Application\nName=Text Editor\n"
