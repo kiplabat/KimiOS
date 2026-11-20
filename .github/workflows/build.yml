@@ -1,5 +1,8 @@
 name: Build KimiOS image
 
+# 0.5.0: one image per architecture, each built on a runner of its own kind (x86_64 and ARM64), published together
+# under the same tags as one multi-architecture image. A computer pulls the one that fits it.
+
 on:
   push:
     branches: [main]
@@ -11,8 +14,8 @@ on:
 env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/kimios
   FEDORA_VERSION: "45"
-  # The newest KimiLM Linux build; a repository variable KIMILM_URL overrides it
-  KIMILM_URL: ${{ vars.KIMILM_URL || 'https://github.com/kiplabat/KimiLM/releases/latest/download/KimiLM-linux-x64.tar.gz' }}
+  # Where the newest KimiLM Linux builds are (KimiLM-linux-<x64|arm64>.tar.gz); a repository variable overrides it
+  KIMILM_BASE: ${{ vars.KIMILM_BASE || 'https://github.com/kiplabat/KimiLM/releases/latest/download' }}
 
 jobs:
   test:
@@ -27,7 +30,17 @@ jobs:
 
   image:
     needs: test
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            kimilm: x64
+            runner: ubuntu-24.04
+          - arch: arm64
+            kimilm: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
@@ -45,15 +58,37 @@ jobs:
           echo "IMAGE_LC=$IMAGE_LC" >> "$GITHUB_ENV"
           podman build \
             --build-arg FEDORA_VERSION="$FEDORA_VERSION" \
-            --build-arg KIMILM_URL="$KIMILM_URL" \
-            -t "$IMAGE_LC:latest" .
+            --build-arg KIMILM_URL="$KIMILM_BASE/KimiLM-linux-${{ matrix.kimilm }}.tar.gz" \
+            -t "$IMAGE_LC:build" .
+          podman run --rm "$IMAGE_LC:build" sh -c 'uname -m; ls -l /usr/bin/kimilm 2>/dev/null || echo "no KimiLM in this image"; /usr/libexec/kimios/kimi-hwprobe | head -c 300; echo'
 
-      - name: Push
+      - name: Push this architecture
         if: github.event_name != 'pull_request'
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u "${{ github.actor }}" --password-stdin
           SHORT_SHA="${GITHUB_SHA::7}"
           for tag in latest "$FEDORA_VERSION" "$FEDORA_VERSION-$SHORT_SHA"; do
-            podman tag "$IMAGE_LC:latest" "$IMAGE_LC:$tag"
-            podman push "$IMAGE_LC:$tag"
+            podman tag "$IMAGE_LC:build" "$IMAGE_LC:$tag-${{ matrix.arch }}"
+            podman push "$IMAGE_LC:$tag-${{ matrix.arch }}"
+          done
+
+  publish:
+    needs: image
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: One image for both architectures under each tag
+        run: |
+          IMAGE_LC="${IMAGE,,}"
+          echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u "${{ github.actor }}" --password-stdin
+          SHORT_SHA="${GITHUB_SHA::7}"
+          for tag in latest "$FEDORA_VERSION" "$FEDORA_VERSION-$SHORT_SHA"; do
+            podman manifest create "$IMAGE_LC:$tag"
+            for arch in amd64 arm64; do
+              podman manifest add "$IMAGE_LC:$tag" "docker://$IMAGE_LC:$tag-$arch"
+            done
+            podman manifest push --all "$IMAGE_LC:$tag" "docker://$IMAGE_LC:$tag"
           done
