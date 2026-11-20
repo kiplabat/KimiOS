@@ -156,7 +156,11 @@ class ToolTest(unittest.TestCase):
 
     def test_drives_and_mount(self):
         lsblk = {"blockdevices": [{"path": "/dev/sda", "type": "disk", "fstype": None, "children": [
-            {"path": "/dev/sda5", "label": "Labatt", "size": "156G", "fstype": "ntfs", "mountpoint": None,
+            {"path": "/dev/sda3", "label": None, "size": "317.6G", "fstype": "crypto_LUKS", "mountpoints": [None],
+             "type": "part", "rm": False, "children": [
+                 {"path": "/dev/mapper/luks-1", "label": "fedora", "size": "317.6G", "fstype": "btrfs",
+                  "fsavail": "292G", "mountpoints": ["/var/home", "/sysroot"], "type": "crypt", "rm": False}]},
+            {"path": "/dev/sda5", "label": "Labatt", "size": "156G", "fstype": "ntfs", "mountpoints": [None],
              "type": "part", "rm": False}]}]}
         calls = []
 
@@ -166,7 +170,11 @@ class ToolTest(unittest.TestCase):
                 return 0, json.dumps(lsblk), ""
             return 0, "Mounted /dev/sda5 at /run/media/u/Labatt\n", ""
         with mock.patch.object(mcp, "run", fake_run):
-            self.assertEqual(mcp.tool_drives()["drives"][0]["label"], "Labatt")
+            luks, inner, labatt = mcp.tool_drives()["drives"]
+            self.assertEqual((luks["encrypted"], luks["unlocked_as"]), (True, "/dev/mapper/luks-1"))
+            self.assertEqual((inner["mounted_at"], inner["also_mounted_at"], inner["free"]),
+                             ("/var/home", ["/sysroot"], "292G"))
+            self.assertEqual((labatt["label"], labatt["mounted_at"]), ("Labatt", None))
             self.assertIn("Mounted", mcp.tool_mount_drive("Labatt")["result"])
             with self.assertRaises(mcp.ToolError):
                 mcp.tool_mount_drive("Nope")

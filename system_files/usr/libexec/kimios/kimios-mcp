@@ -495,7 +495,7 @@ def tool_setting_set(schema, key, value):
 
 # ------------------------------------------------------------------------------------------------- drives
 def tool_drives():
-    code, out, err = run(["lsblk", "-J", "-o", "PATH,LABEL,SIZE,FSTYPE,MOUNTPOINT,TYPE,RM"])
+    code, out, err = run(["lsblk", "-J", "-o", "PATH,LABEL,SIZE,FSTYPE,FSAVAIL,MOUNTPOINTS,TYPE,RM"])
     if code != 0:
         raise ToolError(err.strip()[:200])
     found = []
@@ -503,9 +503,21 @@ def tool_drives():
     def walk(nodes):
         for n in nodes or []:
             if n.get("type") in ("part", "crypt", "disk") and n.get("fstype"):
-                found.append({"device": n.get("path"), "label": n.get("label"), "size": n.get("size"),
-                              "filesystem": n.get("fstype"), "mounted_at": n.get("mountpoint"),
-                              "removable": bool(n.get("rm"))})
+                mounts = [m for m in (n.get("mountpoints") or [n.get("mountpoint")]) if m]
+                drive = {"device": n.get("path"), "label": n.get("label"), "size": n.get("size"),
+                         "filesystem": n.get("fstype"), "mounted_at": mounts[0] if mounts else None,
+                         "removable": bool(n.get("rm"))}
+                if len(mounts) > 1:
+                    drive["also_mounted_at"] = mounts[1:]
+                if n.get("fsavail"):
+                    drive["free"] = n.get("fsavail")
+                if n.get("fstype") == "crypto_LUKS":
+                    inner = [c.get("path") for c in n.get("children") or []]
+                    drive["encrypted"] = True
+                    drive["unlocked_as"] = inner[0] if inner else None
+                    drive["note"] = ("encrypted container, unlocked and in use; its contents are listed as "
+                                     + inner[0]) if inner else "encrypted and locked"
+                found.append(drive)
             walk(n.get("children"))
     walk(json.loads(out).get("blockdevices"))
     return {"drives": found}
@@ -601,7 +613,8 @@ def _ann(read_only, destructive=False, open_world=False):
 S = {"type": "string"}
 TOOLS = {
     "machine": (tool_machine, "This computer's hardware: model, CPU, memory, capabilities (gpu, camera, audio, "
-                "sensors…) and devices, including those without a driver. section: summary (default), devices, "
+                "sensors…) and devices, including those without a driver. Use this rather than uname, lscpu or "
+                "lsusb. section: summary (default), devices, "
                 "unclaimed or all.",
                 _schema({"section": {"enum": ["summary", "devices", "unclaimed", "all"]}}), _ann(True)),
     "system_status": (tool_system_status, "Right now: memory free and used by KimiLM, CPU load, battery and "
@@ -618,7 +631,8 @@ TOOLS = {
     "software": (tool_software, "Installed apps and what they are for, the file types they open, and (with "
                  "commands=true) command-line tools matching the query. Ask this first to find the right tool.",
                  _schema({"query": S, "limit": {"type": "integer"}, "commands": {"type": "boolean"}}), _ann(True)),
-    "drives": (tool_drives, "Drives and partitions with their labels, sizes, file systems and where they are mounted.",
+    "drives": (tool_drives, "Every drive and partition, mounted or not: label, size, free space, file system, "
+               "where it is mounted, and which encrypted containers are unlocked. Use this rather than df or lsblk.",
                _schema(), _ann(True)),
     "setting_get": (tool_setting_get, "Read a desktop setting (gsettings schema and key).",
                     _schema({"schema": S, "key": S}, ("schema", "key")), _ann(True)),
