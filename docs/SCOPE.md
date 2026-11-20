@@ -34,7 +34,7 @@ In the founder's words (20 Nov 2026, lightly edited):
 | Knows what the installed tools can do | Software capability registry | §2.4 | 2 (started) |
 | Understands connected devices | Hardware capability graph; driver synthesis for what has no driver | §2.1, §2.2 | 0 (done), 3 |
 | Suggests ways of working | Suggestions from what the user does, local and opt-in | §2.6 | 2b (started) |
-| Learns what it controls (robot, appliance) | Skill learning; KimiOS Edge for microcontrollers | §2.3 | 4 |
+| Learns what it controls (robot, appliance) | Skill learning; KimiOS Edge for microcontrollers | §2.3 | 4 (started, in simulation) |
 | Knows its constraints and abilities, pushes them a bit | Self-model and bounded exploration | §2.5 | 2b (started) |
 
 ---
@@ -225,6 +225,15 @@ outside KimiOS:
 ### Phase 4 — Skill learning and Edge
 
 - The loop in §2.3, first in simulation, then on one real actuator.
+- **Started (0.4.0), in simulation:** `kimios_control.py` behind three tools. `control_identify` fits a
+  first-order-plus-dead-time model to recorded samples (gain, time constant, dead time, the output with the input
+  off; R² and a trust word); `control_tune` gives SIMC PI gains and on/off advice; `control_simulate` runs on/off or
+  PI (also as a duty cycle) against the model inside a safety envelope (input limits, minimum on and off times,
+  output limits, disturbances) and reports time in band, error, switches per hour and duty (energy). On a simulated
+  refrigerator (K −24 °C, τ 30 min, θ 60 s) identification is within 2–17 % and a ±0.5 °C thermostat holds a
+  ±1 °C band 100 % of the time at 6.3 starts per hour, against 4 per hour and 76 % for ±1.0 °C: the wear and
+  holding trade-off an agent can now reason about before touching a device. Next: a real sensor and actuator
+  through a user-space driver (Phase 3), with the envelope enforced outside the agent.
 - KimiOS Edge firmware for one microcontroller family.
 - Opt-in registry for drivers and skills.
 
@@ -255,7 +264,7 @@ Keeping Windows alongside (dual boot) is recommended until KimiOS can do daily w
 Containerfile                 image definition
 build_files/build.sh          package installs and set-up inside the build
 system_files/                 files copied into / of the image
-  usr/libexec/kimios/         kimios-session, kimi-hwprobe, kimios-mcp (the tool server)
+  usr/libexec/kimios/         kimios-session, kimi-hwprobe, kimios-mcp (the tool server), kimios_control.py
   usr/share/kimilm/plugins/   the KimiOS plugin KimiLM loads (points at kimios-mcp)
   usr/share/polkit-1/rules.d/ administrators mount internal drives without a password
   usr/share/wayland-sessions/ kimios.desktop
