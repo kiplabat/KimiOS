@@ -240,6 +240,11 @@ outside KimiOS:
 ### Phase 5 — Other architectures and form factors
 
 - ARM64 images (Raspberry Pi and similar boards); RISC-V when Fedora bootc supports it.
+- **Started (0.5.0, with KimiLM 2.25.0):** the image is built for x86_64 and ARM64, each on a runner of its own
+  architecture, and published as one multi-architecture image under the same tags (`latest`, `45`,
+  `45-<commit>`). KimiLM publishes `KimiLM-linux-arm64.tar.gz` next to the x64 build, with llama.cpp's ARM64 CPU
+  and Vulkan builds; each image installs the KimiLM build of its own architecture. Not yet on ARM64: the image and
+  music engines (no upstream builds), and booting on a Raspberry Pi (needs UEFI firmware on the board).
 - Headless profile for appliances and robots (no desktop; voice and network control).
 
 ---
