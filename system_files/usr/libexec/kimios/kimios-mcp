@@ -658,8 +658,9 @@ TOOLS = {
                          _schema({"samples": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}},
                                   "csv_path": S, "columns": {"type": "object"}, "dt": {"type": "number"},
                                   "max_dead_time": {"type": "number"}}), _ann(True)),
-    "control_tune": (_wrap("tune"), "PI controller gains from a model (K, tau_s, theta_s from control_identify), and "
-                     "advice for devices that can only be on or off.",
+    "control_tune": (_wrap("tune"), "Tune a PI (or PID-like) controller: gains from a first-order-plus-dead-time "
+                     "model (gain K, time constant tau_s, dead time theta_s, e.g. from control_identify) by the SIMC "
+                     "rules, and advice for devices that can only be on or off. Use it for heaters, motors, fans.",
                      _schema({"K": {"type": "number"}, "tau_s": {"type": "number"}, "theta_s": {"type": "number"},
                               "tau_c_s": {"type": "number"}}, ("K", "tau_s", "theta_s")), _ann(True)),
     "control_simulate": (_wrap("simulate"), "Practise a controller against a model before it touches a real device: "
@@ -680,8 +681,10 @@ TOOLS = {
 
 INSTRUCTIONS = ("KimiOS is the operating system this agent runs on. Use these tools to learn what the computer is "
                 "and what is installed before guessing or searching the web: `software` for apps and tools, "
-                "`machine` for hardware, `system_status` for memory, power and network. Prefer reversible actions; "
-                "`setting_set` returns the old value.")
+                "`machine` for hardware, `drives` for disks, `system_status` for memory, power and network. For "
+                "anything that controls a device (heater, motor, fan, pump: PI/PID tuning, on/off with a band) use "
+                "`control_identify`, `control_tune` and `control_simulate` rather than writing your own code. "
+                "Prefer reversible actions; `setting_set` returns the old value.")
 
 
 # ------------------------------------------------------------------------------------------------- protocol
