@@ -1,4 +1,4 @@
-# KimiOS — scope v0.1
+# KimiOS — scope v0.2
 
 KimiOS is an LLM-native operating system. It grows out of [KimiLM](https://github.com/kiplabat/KimiLM):
 KimiLM is the agent app that runs on Windows, macOS and Linux, and KimiOS is the system it becomes
@@ -8,6 +8,34 @@ The long-term aim: install KimiOS on any device (a laptop, a robot, a fridge), a
 hardware it has, learns to drive it, and improves the longer it runs there.
 
 This document sets out what we build first, how the pieces fit, and the rules that keep it safe.
+
+---
+
+## 0. Vision
+
+In the founder's words (20 Nov 2026, lightly edited):
+
+- KimiOS is the de facto engine for people who work in natural language.
+- Whatever a user does, the model beneath suggests better ways of working and takes effort away.
+- Everything a user touches is served through natural language.
+- KimiOS already knows what the installed tools can do, and engages the user so they get the most out of
+  them for what they want to achieve.
+- It understands the devices connected to the machine.
+- It quickly understands any system it is deployed on: as a robot's operating system, it learns what it
+  has been given to control, and does so.
+- It understands its environment, its constraints and its abilities, and pushes those boundaries just a bit.
+
+### 0.1 What the vision means in the design
+
+| Vision | Built as | Section | Phase |
+|---|---|---|---|
+| Natural language is the way in | The KimiOS session: KimiLM is the desktop; every other piece is reached through it | §2 Shell | 1 (done) |
+| Everything served through natural language | OS MCP server: files, apps, settings, network, devices as tools | §2 | 2 |
+| Knows what the installed tools can do | Software capability registry | §2.4 | 2 |
+| Understands connected devices | Hardware capability graph; driver synthesis for what has no driver | §2.1, §2.2 | 0 (done), 3 |
+| Suggests ways of working | Suggestions from what the user does, local and opt-in | §2.6 | 2b |
+| Learns what it controls (robot, appliance) | Skill learning; KimiOS Edge for microcontrollers | §2.3 | 4 |
+| Knows its constraints and abilities, pushes them a bit | Self-model and bounded exploration | §2.5 | 2b |
 
 ---
 
@@ -30,6 +58,11 @@ This document sets out what we build first, how the pieces fit, and the rules th
    the next install starts smarter. Sharing is opt-in.
 7. **Any hardware.** Nothing assumes an NVIDIA card, a fast CPU or a network. The reference machine
    is slow on purpose (§7).
+8. **Watching is the user's choice.** What KimiOS learns from the user's activity stays on the machine,
+   is off until the user turns it on, can be seen in full and deleted. A suggestion never acts by itself.
+9. **Push boundaries a bit, never far.** KimiOS widens what it can do one small step at a time: each
+   step is measured, reversible and inside the limits above. A step is kept only if it is measurably
+   better; otherwise it is undone.
 
 ---
 
@@ -41,6 +74,9 @@ This document sets out what we build first, how the pieces fit, and the rules th
 | **System services** | KimiLM engine, hardware probe, model runtime, memory limits (`kimilm.slice`), snapshots | Image builds; settings by the user |
 | **Shell** | The KimiOS session: KimiLM full screen in a kiosk compositor (`cage`); GNOME as a second session | User |
 | **OS MCP server** | Tools that let agents act on the system: files, apps (Flatpak), settings, network, devices, packages (in containers), logs | Agents, within permission tiers |
+| **Capability registry** | What the installed software can do (§2.4), next to the hardware graph (§2.1) | Updated by the system when software changes |
+| **Self-model** | What this machine can do and where its limits are, measured (§2.5) | Measured by the system; limits set by the user |
+| **Suggestions** | Ways of working proposed from what the user does (§2.6) | User opts in; every suggestion needs a yes |
 | **Driver and skill space** | User-space drivers and learned control skills, each in its own sandbox with a manifest and tests | Agents propose; promotion needs tests to pass (and approval for physical devices) |
 | **Edge** | Small firmware (KimiOS Edge) for microcontrollers that cannot run a model; the node flashes and drives them | Node, with approval |
 
@@ -84,6 +120,34 @@ For devices that move or regulate something (motors, compressors, heaters, valve
 Example: on a refrigerator, learn compressor cycling that keeps the temperature band while using less
 energy.
 
+### 2.4 Software capability registry (Phase 2)
+
+The hardware graph answers "what is attached"; the registry answers "what can the installed software do".
+
+- Sources: desktop entries and Flatpak manifests (apps, file types, permissions), command-line tools
+  (their `--help`, man pages), MCP servers and KimiLM plugins (their tool lists), and system services.
+- Each entry: what it does in plain words, the actions it offers, the files it reads and writes, and how
+  an agent reaches it (MCP tool, command, D-Bus, or the app's window as a last resort).
+- Refreshed when software is installed or removed. Agents ask the registry first, so a request in
+  natural language goes to the right tool instead of a web search.
+
+### 2.5 Self-model and bounded exploration (Phase 2b)
+
+KimiOS keeps a measured description of itself: speed per model and setting (KimiLM's tuner already
+measures this), memory and thermal headroom, power state, network, disk, and which tasks it has done well
+or badly (KimiLM's evaluation and agent records).
+
+Pushing boundaries a bit (principle 9): from time to time, when the machine is idle and on power, it tries
+one change at the edge of what it knows, such as a larger context, a different model placement, a newly
+found tool or a learned skill on a device, and measures the result. Better results are kept; worse ones are
+undone. The user sees what was tried and can turn it off.
+
+### 2.6 Suggestions (Phase 2b)
+
+With the user's consent (principle 8), KimiOS notices repeated work (the same files renamed by hand every
+week, the same report rebuilt from the same sources) and offers a better way: a scheduled task, a skill, an
+app that already does it. Suggestions are short, can be dismissed for good, and never act without a yes.
+
 ---
 
 ## 3. Phases
@@ -108,8 +172,10 @@ Silverblue machine boots into it; `/var/lib/kimios/hardware.json` describes that
 
 **Done when:** KimiOS boots straight into KimiLM and a local model chat works on the reference laptop.
 
-**Status (19 Nov 2026):** built in KimiLM 2.22.0 (Linux build, release workflow, engine in `kimilm.slice`) and
-KimiOS 0.2.0 (installs the newest KimiLM release daily). Waiting on the first KimiLM release and a test on real hardware.
+**Done (20 Nov 2026)** on the reference laptop: KimiOS 0.2.1 with KimiLM 2.22.0. Qwen3.5 4B passed the
+evaluation 12 of 12 in 24 min (Windows with KimiLM 2.20.0: 11 of 12 in 37 min); Qwen3.5 9B 12 of 12 in 52 min.
+`kimilm.slice` confirmed holding the engine and both model servers (limits 21.7 GB / 26.4 GB).
+Found on the way: Fedora 45 ships OpenSSL 4, so KimiOS adds `openssl3-libs` (0.2.1).
 
 ### Phase 2 — OS MCP server and installer
 
@@ -117,6 +183,12 @@ KimiOS 0.2.0 (installs the newest KimiLM release daily). Waiting on the first Ki
   apps, settings) → system actions (need approval).
 - Snapshot before risky actions; one-step undo.
 - Installer ISO (interactive, never "install to the first disk").
+- Software capability registry (§2.4), read through the OS MCP server.
+
+### Phase 2b — Self-model and suggestions
+
+- Self-model and bounded exploration (§2.5), starting from KimiLM's tuner and evaluation.
+- Suggestions from the user's activity, opt-in (§2.6).
 
 ### Phase 3 — Driver synthesis
 
