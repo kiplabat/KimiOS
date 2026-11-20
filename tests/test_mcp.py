@@ -278,3 +278,72 @@ class PluginTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ControlTest(unittest.TestCase):
+    """Skill learning in simulation (Phase 4): a simulated refrigerator, identified, tuned and controlled."""
+
+    @staticmethod
+    def fridge(K=-24.0, tau=1800.0, theta=60.0, ambient=20.0, dt=10.0, n=2400, noise=0.02):
+        import random
+        rnd = random.Random(1)
+        y, queue, rows, u = 5.0, [0] * int(theta / dt), [], 0
+        for i in range(n):
+            if i % 120 == 0:
+                u = 1 - u
+            queue.append(u)
+            applied = queue.pop(0)
+            y += dt * (K * applied + ambient - y) / tau
+            rows.append([i * dt, u, y + rnd.gauss(0, noise)])
+        return rows
+
+    def test_identify_recovers_the_fridge(self):
+        r = mcp.call("control_identify", {"samples": self.fridge()})
+        self.assertFalse(r["isError"], r)
+        m = r["structuredContent"]
+        self.assertAlmostEqual(m["K"], -24, delta=1.0)
+        self.assertAlmostEqual(m["tau_s"], 1800, delta=90)
+        self.assertAlmostEqual(m["theta_s"], 60, delta=15)
+        self.assertAlmostEqual(m["offset"], 20, delta=0.5)
+        self.assertEqual(m["trust"], "good")
+
+    def test_identify_from_csv_and_bad_data(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "log.csv"
+            path.write_text("time,compressor,temp\n" + "".join(f"{t},{u},{y}\n" for t, u, y in self.fridge(n=600)))
+            r = mcp.call("control_identify", {"csv_path": str(path), "columns": {"t": "time", "u": "compressor", "y": "temp"}})
+            self.assertFalse(r["isError"], r)
+            r = mcp.call("control_identify", {"csv_path": str(path)})
+            self.assertTrue(r["isError"])
+            self.assertIn("no column", r["content"][0]["text"])
+        flat = [[i, 1, 5.0] for i in range(50)]
+        r = mcp.call("control_identify", {"samples": flat})
+        self.assertTrue(r["isError"])
+        self.assertIn("never changes", r["content"][0]["text"])
+
+    def test_tune_and_simulate_hold_the_set_point(self):
+        g = mcp.call("control_tune", {"K": -24, "tau_s": 1800, "theta_s": 60})["structuredContent"]
+        self.assertLess(g["pi"]["Kc"], 0)                    # cooling: more input for a warmer cabinet
+        model = {"K": -24, "tau_s": 1800, "theta_s": 60, "offset": 20, "duration_s": 6 * 3600, "y0": 8, "band": 1.0}
+        tight = mcp.call("control_simulate", {**model, "controller": {"type": "onoff", "setpoint": 4, "hysteresis": 0.5}})
+        loose = mcp.call("control_simulate", {**model, "controller": {"type": "onoff", "setpoint": 4, "hysteresis": 1.0}})
+        pi = mcp.call("control_simulate", {**model, "controller": {"type": "pi", "setpoint": 4, "Kc": g["pi"]["Kc"],
+                                                                   "Ti_s": g["pi"]["Ti_s"]}})
+        t, l, p = (x["structuredContent"] for x in (tight, loose, pi))
+        self.assertGreater(t["time_in_band_pct"], 95)
+        self.assertLess(l["switch_ons_per_hour"], t["switch_ons_per_hour"])     # less wear, worse holding
+        self.assertLess(l["time_in_band_pct"], t["time_in_band_pct"])
+        self.assertAlmostEqual(p["final_output"], 4, delta=0.05)
+        self.assertAlmostEqual(t["duty_pct"], 100 * (20 - 4) / 24, delta=3)     # energy follows the physics
+        self.assertLessEqual(len(t["trace"]), 61)
+
+    def test_minimum_off_time_is_respected(self):
+        r = mcp.call("control_simulate", {"K": -24, "tau_s": 1800, "theta_s": 60, "offset": 20, "duration_s": 4 * 3600,
+                                          "y0": 4, "min_off_s": 1200,
+                                          "controller": {"type": "onoff", "setpoint": 4, "hysteresis": 0.2}})
+        self.assertLessEqual(r["structuredContent"]["switch_ons_per_hour"], 3600 / 1200 + 0.5)
+
+    def test_bad_controller_is_explained(self):
+        r = mcp.call("control_simulate", {"K": 1, "tau_s": 10, "theta_s": 0, "controller": {"type": "fuzzy"}})
+        self.assertTrue(r["isError"])
+        self.assertIn("onoff", r["content"][0]["text"])

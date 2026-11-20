@@ -6,6 +6,7 @@ system plugin /usr/share/kimilm/plugins/kimios. docs/SCOPE.md §2 ("OS MCP serve
 
 Tools, by how much they change (MCP annotations tell the client; the client decides what needs approval):
   look      machine, device_inspect, abilities, system_status, software, drives, setting_get, logs, os_status
+  compute   control_identify, control_tune, control_simulate (skill learning in simulation, kimios_control.py)
   act       open, launch_app, notify, setting_set (allow-listed desktop settings; returns the old value),
             mount_drive, app_install
   remove    app_remove
@@ -27,7 +28,7 @@ import sys
 import time
 from pathlib import Path
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 ROOT = Path(os.environ.get("KIMIOS_ROOT", "/"))        # tests point this at a fake /sys and /proc
 HARDWARE_JSON = Path(os.environ.get("KIMIOS_HARDWARE_JSON", "/var/lib/kimios/hardware.json"))
 HWPROBE = "/usr/libexec/kimios/kimi-hwprobe"
@@ -570,6 +571,23 @@ def tool_app_remove(app_id):
     return {"removed": app_id}
 
 
+# ------------------------------------------------------------------------------------------------- control (Phase 4)
+def _control():
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import kimios_control
+    return kimios_control
+
+
+def _wrap(fn):
+    def call(**args):
+        ctl = _control()
+        try:
+            return getattr(ctl, fn)(**args)
+        except ctl.ControlError as exc:
+            raise ToolError(str(exc)) from None
+    return call
+
+
 # ------------------------------------------------------------------------------------------------- the tool list
 def _schema(props=None, required=()):
     return {"type": "object", "properties": props or {}, "required": list(required), "additionalProperties": False}
@@ -619,6 +637,29 @@ TOOLS = {
                     _schema({"label": S}, ("label",)), _ann(False)),
     "app_install": (tool_app_install, "Install an app from Flathub for this user (by its app id).",
                     _schema({"app_id": S}, ("app_id",)), _ann(False, open_world=True)),
+    "control_identify": (_wrap("identify"), "Learn how a device responds from recorded data: samples as [time_s, "
+                         "input, output] triples, or a CSV file (csv_path, columns {t, u, y}). Fits gain K, time "
+                         "constant τ, dead time θ and the output with the input off. Example: compressor on/off and "
+                         "fridge temperature.",
+                         _schema({"samples": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}},
+                                  "csv_path": S, "columns": {"type": "object"}, "dt": {"type": "number"},
+                                  "max_dead_time": {"type": "number"}}), _ann(True)),
+    "control_tune": (_wrap("tune"), "PI controller gains from a model (K, tau_s, theta_s from control_identify), and "
+                     "advice for devices that can only be on or off.",
+                     _schema({"K": {"type": "number"}, "tau_s": {"type": "number"}, "theta_s": {"type": "number"},
+                              "tau_c_s": {"type": "number"}}, ("K", "tau_s", "theta_s")), _ann(True)),
+    "control_simulate": (_wrap("simulate"), "Practise a controller against a model before it touches a real device: "
+                         "on/off with a band, or PI (optionally as a duty cycle with pwm_period_s), inside limits "
+                         "(u_min, u_max, min_on_s, min_off_s, y_limits). Reports time in band, error, switching per "
+                         "hour and duty (energy). Compare settings by calling it several times.",
+                         _schema({"K": {"type": "number"}, "tau_s": {"type": "number"}, "theta_s": {"type": "number"},
+                                  "offset": {"type": "number"}, "controller": {"type": "object"},
+                                  "duration_s": {"type": "number"}, "dt_s": {"type": "number"},
+                                  "y0": {"type": "number"}, "u_min": {"type": "number"}, "u_max": {"type": "number"},
+                                  "min_on_s": {"type": "number"}, "min_off_s": {"type": "number"},
+                                  "y_limits": {"type": "array", "items": {"type": "number"}},
+                                  "band": {"type": "number"}, "disturbance": {"type": "array"}},
+                                 ("K", "tau_s", "theta_s", "controller")), _ann(True)),
     "app_remove": (tool_app_remove, "Remove an app installed from Flathub for this user.",
                    _schema({"app_id": S}, ("app_id",)), _ann(False, destructive=True)),
 }
