@@ -1,0 +1,16 @@
+{
+  "id": "kimios",
+  "name": "KimiOS",
+  "version": "0.3.0",
+  "description": "The operating system KimiLM runs on: its hardware, installed apps, settings, drives, logs and status, as tools for agents.",
+  "author": "KimiOS",
+  "homepage": "https://github.com/kiplabat/KimiOS",
+  "default_enabled": true,
+  "mcpServers": {
+    "KimiOS": {
+      "command": "/usr/libexec/kimios/kimios-mcp",
+      "args": [],
+      "description": "See and act on this computer: hardware, installed software, settings, drives, logs, system status."
+    }
+  }
+}

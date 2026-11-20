@@ -30,12 +30,12 @@ In the founder's words (20 Nov 2026, lightly edited):
 | Vision | Built as | Section | Phase |
 |---|---|---|---|
 | Natural language is the way in | The KimiOS session: KimiLM is the desktop; every other piece is reached through it | §2 Shell | 1 (done) |
-| Everything served through natural language | OS MCP server: files, apps, settings, network, devices as tools | §2 | 2 |
-| Knows what the installed tools can do | Software capability registry | §2.4 | 2 |
+| Everything served through natural language | OS MCP server: files, apps, settings, network, devices as tools | §2 | 2 (started) |
+| Knows what the installed tools can do | Software capability registry | §2.4 | 2 (started) |
 | Understands connected devices | Hardware capability graph; driver synthesis for what has no driver | §2.1, §2.2 | 0 (done), 3 |
-| Suggests ways of working | Suggestions from what the user does, local and opt-in | §2.6 | 2b |
+| Suggests ways of working | Suggestions from what the user does, local and opt-in | §2.6 | 2b (started) |
 | Learns what it controls (robot, appliance) | Skill learning; KimiOS Edge for microcontrollers | §2.3 | 4 |
-| Knows its constraints and abilities, pushes them a bit | Self-model and bounded exploration | §2.5 | 2b |
+| Knows its constraints and abilities, pushes them a bit | Self-model and bounded exploration | §2.5 | 2b (started) |
 
 ---
 
@@ -185,14 +185,41 @@ Found on the way: Fedora 45 ships OpenSSL 4, so KimiOS adds `openssl3-libs` (0.2
 - Installer ISO (interactive, never "install to the first disk").
 - Software capability registry (§2.4), read through the OS MCP server.
 
+**Started (20 Nov 2026), KimiOS 0.3.0:** `kimios-mcp`, an MCP server over stdio with no dependencies, offered to
+KimiLM as a system plugin (`/usr/share/kimilm/plugins/kimios`, read by KimiLM 2.23.0). Tools:
+look (`machine`, `device_inspect`, `abilities`, `system_status`, `os_status`, `software`, `drives`,
+`setting_get`, `logs`), act (`open`,
+`launch_app`, `notify`, `setting_set` on an allow-list, returning the old value; `mount_drive`; `app_install`),
+remove (`app_remove`). MCP annotations mark read-only and destructive tools; KimiLM's approval mode decides what
+asks first. The registry reads desktop entries (system, user, Flatpak) and, on request, matching commands.
+A polkit rule lets administrators mount internal drives without a password (KimiLM mounts the drive a model is on).
+Still to do: snapshots before risky actions, the installer ISO, richer registry entries (D-Bus, `--help`).
+
 ### Phase 2b — Self-model and suggestions
 
 - Self-model and bounded exploration (§2.5), starting from KimiLM's tuner and evaluation.
 - Suggestions from the user's activity, opt-in (§2.6).
 
+**Started (0.3.0):** the `abilities` tool is the first self-model. It reads KimiLM's own measurements (model
+speeds, evaluation scores) read-only, adds memory headroom and power, and names the best local model for agent
+work (on the reference laptop: Qwen3.5 4B, 12 of 12 in 24 min).
+
+**KimiLM 2.24.0** adds the first bounded exploration and the first suggestions, inside KimiLM so they also work
+outside KimiOS:
+- *Exploring while idle* (on by default, Settings → "Finding better ways, on its own"): when nothing runs, the
+  machine is plugged in and KimiLM has been idle for 30 minutes, it measures the fastest setup of one local model
+  not measured in 30 days, at most once a day. Anything the user starts stops it. The result is offered on the
+  model's card; nothing is applied on its own (principles 8 and 9).
+- *Suggestions* (off until switched on): a request started as a new chat on three or more different days is
+  offered as a scheduled task at the usual time. Only KimiLM's own chats are read; nothing leaves the computer.
+
 ### Phase 3 — Driver synthesis
 
 - The pipeline in §2.2 for USB, serial, I2C and GPIO devices.
+- **Started (0.3.0):** steps 1 and 2 of §2.2 as the `device_inspect` tool: names from hwdata, interfaces,
+  kernel modules whose aliases match the device and whether they are loaded, and the next step. On the reference
+  laptop's unclaimed list it tells the Synaptics fingerprint reader (user-space, fprintd) from a chipset memory
+  controller that needs nothing.
 - Test bench: a USB sensor, a serial device and a GPIO board (for example a Raspberry Pi as a second node).
 
 ### Phase 4 — Skill learning and Edge
@@ -228,7 +255,9 @@ Keeping Windows alongside (dual boot) is recommended until KimiOS can do daily w
 Containerfile                 image definition
 build_files/build.sh          package installs and set-up inside the build
 system_files/                 files copied into / of the image
-  usr/libexec/kimios/         kimios-session, kimi-hwprobe
+  usr/libexec/kimios/         kimios-session, kimi-hwprobe, kimios-mcp (the tool server)
+  usr/share/kimilm/plugins/   the KimiOS plugin KimiLM loads (points at kimios-mcp)
+  usr/share/polkit-1/rules.d/ administrators mount internal drives without a password
   usr/share/wayland-sessions/ kimios.desktop
   usr/lib/systemd/            kimilm.slice (user), kimi-hwprobe.service (system)
   usr/lib/udev/rules.d/       re-probe on hot-plug
