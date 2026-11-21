@@ -1,0 +1,27 @@
+[Unit]
+Description=KimiOS envelope: drivers, controllers and the guard for devices that move, heat, cool or switch
+Documentation=https://github.com/kiplabat/KimiOS/blob/main/docs/SCOPE.md
+# 0.9.0: agents reach these devices only through /run/kimios-envelope/envelope.sock; whatever they ask passes the
+# guard, which applies each device's datasheet. Agents cannot stop, change or bypass it (another user, no
+# writable code, the devices' ports are its own).
+After=kimi-simbench.service
+Wants=kimi-simbench.service
+
+[Service]
+ExecStart=/usr/libexec/kimios/kimi-envelope
+DynamicUser=yes
+User=kimi-envelope
+RuntimeDirectory=kimios-envelope
+RuntimeDirectoryMode=0755
+StateDirectory=kimios-envelope
+Environment=KIMIOS_SIM_DIR=/run/kimios-sim KIMIOS_ENVELOPE_DIR=/run/kimios-envelope KIMIOS_ENVELOPE_STATE=/var/lib/kimios-envelope
+ProtectSystem=strict
+ProtectHome=yes
+PrivateNetwork=yes
+NoNewPrivileges=yes
+CPUQuota=15%
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

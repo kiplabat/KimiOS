@@ -1,0 +1,24 @@
+[Unit]
+Description=KimiOS simulated device bench (a fridge, a heated room, an air sensor on serial ports)
+Documentation=https://github.com/kiplabat/KimiOS/blob/main/docs/SCOPE.md
+# 0.9.0: devices that behave like real ones, for building and testing control without hardware. Their ports
+# belong to the envelope's user (shared through DynamicUser), so only the envelope can drive them.
+# Not wanted: systemctl disable --now kimi-simbench
+
+[Service]
+ExecStart=/usr/libexec/kimios/kimi-simbench
+DynamicUser=yes
+User=kimi-envelope
+RuntimeDirectory=kimios-sim
+RuntimeDirectoryMode=0755
+Environment=KIMIOS_SIM_DIR=/run/kimios-sim KIMIOS_SIM_SPEED=60
+ProtectSystem=strict
+ProtectHome=yes
+PrivateNetwork=yes
+NoNewPrivileges=yes
+CPUQuota=10%
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

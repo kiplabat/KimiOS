@@ -29,7 +29,7 @@ import sys
 import time
 from pathlib import Path
 
-VERSION = "0.8.0"
+VERSION = "0.9.0"
 ROOT = Path(os.environ.get("KIMIOS_ROOT", "/"))        # tests point this at a fake /sys and /proc
 HARDWARE_JSON = Path(os.environ.get("KIMIOS_HARDWARE_JSON", "/var/lib/kimios/hardware.json"))
 TELEMETRY_JSON = Path(os.environ.get("KIMIOS_TELEMETRY_JSON", "/run/kimios/telemetry.json"))   # kimi-telemetry (0.6.0)
@@ -664,14 +664,138 @@ def _wrap(fn):
     return call
 
 
+# ------------------------------------------------------------------------------------------------- the bench (0.9.0)
+def _envelope():
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import kimios_envelope
+    return kimios_envelope
+
+
+def _ask(req, timeout=150.0):
+    env = _envelope()
+    try:
+        return env.request(req, Path(os.environ.get("KIMIOS_ENVELOPE_SOCKET", str(env.SOCKET))), timeout)
+    except env.EnvelopeError as exc:
+        raise ToolError(str(exc)) from None
+
+
+def _sim_control(req):
+    path = Path(os.environ.get("KIMIOS_SIM_DIR", "/run/kimios-sim")) / "control.sock"
+    import socket as _socket
+    with _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM) as s:
+        s.settimeout(10)
+        try:
+            s.connect(str(path))
+        except OSError as exc:
+            raise ToolError(f"the simulated bench is not running ({exc}): systemctl status kimi-simbench") from None
+        s.sendall((json.dumps(req) + "\n").encode())
+        out = json.loads(s.makefile().readline() or "{}")
+    if not out.get("ok"):
+        raise ToolError(out.get("error") or "the bench refused")
+    return out
+
+
+def tool_bench(device=None, send=None):
+    if not device:
+        rows = _ask({"op": "devices"})["devices"]
+        return {"devices": rows, "next": "bench(device=<id>) for its datasheet, driver and state"}
+    if send:
+        text = str(send).strip()
+        if not (text.endswith("?") or text.upper() in ("HELP", "ID?", "*IDN?", "READ")):
+            raise ToolError("bench only sends questions (commands ending in ?, HELP, READ); outputs are set by "
+                            "controller or bench_experiment, through the guard")
+        return {"sent": text, "reply": _ask({"op": "probe", "device": device, "text": text})["reply"]}
+    out = _ask({"op": "device", "device": device})
+    st = out["status"]
+    if out["driver"]["current"] is None:
+        st["next"] = ("No driver yet: read the datasheet, send HELP (bench send='HELP'), write a manifest "
+                      "{read: [{command, pattern with (?P<sensor>…) groups}], write: {output: {command with {value}, "
+                      "ok}}} and try it with driver(action='test').")
+    return out
+
+
+def tool_driver(device, action, manifest=None, version=None, note=None):
+    if action == "test":
+        if not manifest:
+            raise ToolError("give the manifest to test")
+        out = _ask({"op": "driver_test", "device": device, "manifest": manifest})
+        if not out["passed"]:
+            out["next"] = "fix what failed and test again; promote only when every check passes"
+        return out
+    if action == "promote":
+        return _ask({"op": "driver_promote", "device": device, "manifest": manifest, "by": "agent",
+                     "note": note or ""})
+    if action == "versions":
+        return _ask({"op": "device", "device": device})["driver"]
+    if action == "rollback":
+        return _ask({"op": "driver_rollback", "device": device, "version": version})
+    raise ToolError("action is test, promote, versions or rollback")
+
+
+def _bench_csv(device, rows):
+    folder = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "kimios" / "bench"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{device}-{time.strftime('%Y%m%d-%H%M%S')}.csv"
+    if not rows:
+        raise ToolError("the experiment gave no readings")
+    t0 = rows[0]["t"]
+    cols = [k for k in rows[0] if k not in ("t", "mode")]
+    with path.open("w", encoding="utf-8") as f:
+        f.write(",".join(["t"] + cols) + "\n")
+        for r in rows:
+            f.write(",".join([f"{r['t'] - t0:g}"] + ["" if r.get(c) is None else f"{r[c]:g}" for c in cols]) + "\n")
+    first, last = rows[0], rows[-1]
+    return {"csv_path": str(path), "columns": ["t"] + cols, "samples": len(rows),
+            "seconds": round(last["t"] - t0), "start": {c: first.get(c) for c in cols},
+            "end": {c: last.get(c) for c in cols},
+            "next": "fit a model with control_identify(csv_path, columns={t: 't', u: <output>, y: <sensor>})"}
+
+
+def tool_bench_experiment(device, steps=None, output=None, value=None, seconds=None, after_s=None, collect=False):
+    if collect:
+        out = _ask({"op": "experiment", "device": device, "collect": True})
+    else:
+        if not steps:
+            if output is None or value is None or not seconds:
+                raise ToolError("give steps [{set: {output: value}, seconds}], or output, value and seconds "
+                                "(and after_s to keep recording with the output back off)")
+            steps = [{"set": {output: value}, "seconds": seconds}]
+            if after_s:
+                steps.append({"set": {output: 0}, "seconds": after_s})
+        out = _ask({"op": "experiment", "device": device, "steps": steps, "max_wait_s": 100}, timeout=130)
+    if out.get("running"):
+        return {"running": True, "next": "still running (device time runs faster than the clock on a simulated "
+                                         "device): call bench_experiment(device, collect=true) in a moment"}
+    return _bench_csv(device, out["rows"])
+
+
+def tool_bench_event(device, event, args=None):
+    return _sim_control({"device": device, "event": event, "args": args or {}})
+
+
+def tool_controller(device, action, spec=None):
+    if action == "check":
+        return _ask({"op": "controller_check", "device": device, "spec": spec})
+    if action == "start":
+        out = _ask({"op": "controller_start", "device": device, "spec": spec, "by": "agent"})
+        out["next"] = "watch it with bench(device): mode, readings, outputs and the guard's events"
+        return out
+    if action == "stop":
+        return _ask({"op": "controller_stop", "device": device})
+    raise ToolError("action is check, start or stop")
+
+
 # ------------------------------------------------------------------------------------------------- the tool list
 def _schema(props=None, required=()):
     return {"type": "object", "properties": props or {}, "required": list(required), "additionalProperties": False}
 
 
-def _ann(read_only, destructive=False, open_world=False):
-    return {"readOnlyHint": read_only, "destructiveHint": destructive, "openWorldHint": open_world,
-            "idempotentHint": read_only}
+def _ann(read_only, destructive=False, open_world=False, physical=False):
+    out = {"readOnlyHint": read_only, "destructiveHint": destructive, "openWorldHint": open_world,
+           "idempotentHint": read_only}
+    if physical:
+        out["physicalHint"] = True      # 0.9.0: it can move, heat, cool or switch something (KimiLM asks every time
+    return out                          # for a real device, whatever its approval setting)
 
 
 S = {"type": "string"}
@@ -747,6 +871,41 @@ TOOLS = {
                                   "y_limits": {"type": "array", "items": {"type": "number"}},
                                   "band": {"type": "number"}, "disturbance": {"type": "array"}},
                                  ("K", "tau_s", "theta_s", "controller")), _ann(True)),
+    "bench": (tool_bench, "Devices that are controlled through KimiOS's guard (simulated ones start with sim-: a "
+              "fridge, a heated room, an air sensor). No device: the list. device: its datasheet (sensors with "
+              "units, valid ranges and allowed set points; outputs with their hard limits; its own controller), its "
+              "driver and its state now (mode, readings, outputs, the guard's events). send: a question to the "
+              "device (HELP, MEAS?, READ…) to learn its protocol.",
+              _schema({"device": S, "send": S}), _ann(True)),
+    "driver": (tool_driver, "Drivers for bench devices are manifests: {read: [{command, pattern}], write: {output: "
+               "{command, ok, scale}}}. pattern is a regular expression with one named group per sensor, named "
+               "as in the datasheet ((?P<t_top>-?[\\d.]+)); command contains {value}; ok is a regular expression "
+               "the answer must match (default ^OK); scale turns 0..1 into the device's units (100 for percent). "
+               "action test: try it (moves nothing); promote: keep it as the next version (it must pass); "
+               "versions; rollback to a version.",
+               _schema({"device": S, "action": {"enum": ["test", "promote", "versions", "rollback"]},
+                        "manifest": {"type": "object"}, "version": {"type": "integer"}, "note": S},
+                       ("device", "action")), _ann(False)),
+    "bench_experiment": (tool_bench_experiment, "Learn how a bench device responds: set outputs in steps and "
+                         "record every reading (times in device seconds; simulated devices run faster than the "
+                         "clock). steps: [{set: {output: value}, seconds}], or output, value, seconds and after_s. "
+                         "Saves a CSV for control_identify. A controller must not be running. collect: true fetches "
+                         "the result of one still running.",
+                         _schema({"device": S, "steps": {"type": "array", "items": {"type": "object"}},
+                                  "output": S, "value": {"type": "number"}, "seconds": {"type": "number"},
+                                  "after_s": {"type": "number"}, "collect": {"type": "boolean"}}, ("device",)),
+                         _ann(False, physical=True)),
+    "controller": (tool_controller, "Run a controller on a bench device, inside the guard. spec: {period_s, loops: "
+                   "[{name, sensor, output, setpoint, action: cool|heat, mode: onoff (band) | pi (kp, ti_s, "
+                   "pwm_period_s for on/off outputs), also: [outputs this loop needs on too]}]}. Set points must be "
+                   "inside the datasheet's allowed range; outputs no loop drives stay at their safe value. action "
+                   "check: what is wrong; start; stop (the device's own controller takes over).",
+                   _schema({"device": S, "action": {"enum": ["check", "start", "stop"]}, "spec": {"type": "object"}},
+                           ("device", "action")), _ann(False, physical=True)),
+    "bench_event": (tool_bench_event, "Simulated devices only: make something happen to test a controller. Fridge: "
+                    "door_open {seconds}, warm_load {compartment: top|bottom, degrees}, ambient {value}; room: "
+                    "ambient {value}, door_open; any: sensor_fault {sensor, mode: dead|stuck, seconds}.",
+                    _schema({"device": S, "event": S, "args": {"type": "object"}}, ("device", "event")), _ann(False)),
     "app_remove": (tool_app_remove, "Remove an app installed from Flathub for this user.",
                    _schema({"app_id": S}, ("app_id",)), _ann(False, destructive=True)),
 }
@@ -763,7 +922,14 @@ INSTRUCTIONS = ("KimiOS is the operating system this agent runs on. Use these to
                 "in (phones, boards, sensors, displays, keyboards, sound, Bluetooth) use KimiLM's `devices` and "
                 "`device_control`; `device_inspect` here is for the drivers of one bus address. A command-line "
                 "program that is missing is installed with KimiLM's `install_program` (into KimiLM's toolbox); "
-                "`app_install` is for Flathub apps.")
+                "`app_install` is for Flathub apps. "
+                "To make a device do what someone asks (cool a compartment to 4 °C, keep a room at 21 °C), work "
+                "through the bench, in order: `bench` (datasheet, then send HELP); without a driver write a "
+                "manifest, `driver` test until it passes, then promote; `bench_experiment` a step on each output "
+                "that matters; `control_identify` on its CSV; `control_tune` and `control_simulate` to choose "
+                "settings; `controller` check, then start; `bench` to watch it hold the goal (and `bench_event` to "
+                "test it on a simulated device). The guard enforces the datasheet whatever you ask; if it holds an "
+                "output back, its events say why.")
 
 
 # ------------------------------------------------------------------------------------------------- protocol

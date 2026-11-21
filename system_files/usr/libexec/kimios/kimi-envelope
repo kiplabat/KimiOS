@@ -1,0 +1,8 @@
+#!/usr/bin/python3
+"""KimiOS 0.9.0: the envelope service (see kimios_envelope.py)."""
+import sys
+
+sys.path.insert(0, "/usr/libexec/kimios")
+import kimios_envelope  # noqa: E402
+
+sys.exit(kimios_envelope.main())

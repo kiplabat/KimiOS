@@ -252,6 +252,33 @@ outside KimiOS:
   ±1 °C band 100 % of the time at 6.3 starts per hour, against 4 per hour and 76 % for ±1.0 °C: the wear and
   holding trade-off an agent can now reason about before touching a device. Next: a real sensor and actuator
   through a user-space driver (Phase 3), with the envelope enforced outside the agent.
+- **Started (0.9.0, with KimiLM 2.30.0): the whole loop on simulated devices.** `kimi-simbench` runs devices that
+  behave like boards on serial ports: a two-compartment fridge (compressor with its own short-cycle lockout, an
+  air damper, two temperatures, a door switch), a room with an electric heater, an air sensor. Their physics run
+  60 times faster than the clock, so a two-hour experiment takes two minutes. Each has a datasheet: sensors with
+  units, valid ranges and allowed set points; outputs with hard limits (minimum on and off times, starts per hour,
+  range, rate, safe value); trips; its own controller.
+  `kimi-envelope` is the guard (principle 5), a system service under its own user: only it can open the devices'
+  ports, and agents reach them through its socket. **Drivers are manifests, not code** (Phase 3, steps 3–5): the
+  commands that read the sensors (a pattern with one named group per sensor) and the template that sets each
+  output. An agent writes one from the datasheet and the device's HELP; the test reads every sensor and writes
+  each output's current value (it moves nothing); a driver that passes is promoted as a new version, older ones
+  can be rolled back. **Controllers are specs**: loops of sensor → output with a set point inside the datasheet's
+  range, on/off with a band or PI (a duty cycle for on/off outputs), and `also` for outputs a loop needs (the top
+  of a fridge only cools while the compressor runs). Every tick the guard applies the datasheet whatever is
+  asked; a controller that fails or loses its sensors is replaced by the device's own (fallback), and with no
+  usable readings every output goes to its safe value. Experiments (steps of outputs over time) are recorded for
+  `control_identify`.
+  The agents' path, as five tools in `kimios-mcp` 0.9.0: `bench` (datasheet, state, questions to the device),
+  `driver` (test, promote, versions, rollback), `bench_experiment`, `controller` (check, start, stop),
+  `bench_event` (door open, warm food, a dead sensor). Tools that move something carry `physicalHint`: KimiLM asks
+  every time for a real device. On the simulated fridge, from a step experiment to a controller: top 4.0 °C and
+  bottom −18.0 °C held (±0.4 and ±0.7 °C), three compressor starts an hour, never a lockout; an open door and warm
+  food are absorbed; a dead freezer sensor sends it to fallback and then to safe.
+  The guarantee is in the limits: no driver or controller can take a device past its datasheet. Approving a first
+  run is the app's step (KimiLM), not a security boundary: anything the signed-in user can run, an agent of theirs
+  can. Real devices join the same way, with a datasheet that the envelope reads from the system (next: claim
+  their ports from `uaccess`, so only the envelope can open them).
 - KimiOS Edge firmware for one microcontroller family.
 - Opt-in registry for drivers and skills.
 
@@ -287,7 +314,9 @@ Keeping Windows alongside (dual boot) is recommended until KimiOS can do daily w
 Containerfile                 image definition
 build_files/build.sh          package installs and set-up inside the build
 system_files/                 files copied into / of the image
-  usr/libexec/kimios/         kimios-session, kimi-hwprobe, kimios-mcp (the tool server), kimios_control.py
+  usr/libexec/kimios/         kimios-session, kimi-hwprobe, kimios-mcp (the tool server), kimios_control.py,
+                              kimi-simbench + kimios_bench.py (simulated devices), kimi-envelope +
+                              kimios_envelope.py (drivers, controllers, the guard)
   usr/share/kimilm/plugins/   the KimiOS plugin KimiLM loads (points at kimios-mcp)
   usr/share/polkit-1/rules.d/ administrators mount internal drives without a password
   usr/share/wayland-sessions/ kimios.desktop
