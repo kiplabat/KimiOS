@@ -1,0 +1,20 @@
+[Unit]
+Description=KimiOS: make KimiLM's toolbox ready for the programs agents install
+Documentation=https://github.com/kiplabat/KimiOS/blob/main/docs/SCOPE.md
+# 0.8.0: the system is read-only, so command-line programs an agent needs go into a toolbox container of KimiLM's
+# own (kimilm-tools), where installing needs no password. Making it downloads a small Fedora system once; doing it
+# in the background after the first login means the first install does not wait for it.
+ConditionPathExists=/usr/bin/toolbox
+After=graphical-session.target network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'toolbox list --containers 2>/dev/null | grep -qw kimilm-tools || toolbox create -y kimilm-tools'
+Nice=15
+IOSchedulingClass=idle
+TimeoutStartSec=30min
+Restart=on-failure
+RestartSec=10min
+
+[Install]
+WantedBy=default.target

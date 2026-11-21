@@ -7,6 +7,10 @@ PACKAGES=(
   python3         # kimi-hwprobe (standard library only)
   openssl3-libs   # libssl.so.3 for KimiLM's llama.cpp builds (Fedora 45's own OpenSSL is 4.0, libssl.so.4)
   usbutils pciutils i2c-tools libgpiod-utils   # device inspection for agents
+  # 0.8.0: programs that control what people plug in (KimiLM's Devices): Android phones, iPhones, displays
+  android-tools                     # adb and fastboot
+  libimobiledevice-utils usbmuxd    # ideviceinfo for iPhones and iPads
+  ddcutil                           # an external display's brightness and input (DDC/CI)
 )
 
 if command -v dnf5 >/dev/null 2>&1; then
@@ -40,3 +44,4 @@ fi
 
 systemctl enable kimi-hwprobe.service
 systemctl enable kimi-telemetry.service   # 0.6.0: readings for KimiLM's Performance window
+systemctl --global enable kimios-toolbox.service   # 0.8.0: KimiLM's toolbox, made in the background at first login

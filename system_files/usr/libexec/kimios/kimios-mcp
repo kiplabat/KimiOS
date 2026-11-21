@@ -29,7 +29,7 @@ import sys
 import time
 from pathlib import Path
 
-VERSION = "0.7.0"
+VERSION = "0.8.0"
 ROOT = Path(os.environ.get("KIMIOS_ROOT", "/"))        # tests point this at a fake /sys and /proc
 HARDWARE_JSON = Path(os.environ.get("KIMIOS_HARDWARE_JSON", "/var/lib/kimios/hardware.json"))
 TELEMETRY_JSON = Path(os.environ.get("KIMIOS_TELEMETRY_JSON", "/run/kimios/telemetry.json"))   # kimi-telemetry (0.6.0)
@@ -759,7 +759,11 @@ INSTRUCTIONS = ("KimiOS is the operating system this agent runs on. Use these to
                 "`control_identify`, `control_tune` and `control_simulate` rather than writing your own code. "
                 "Change desktop and display settings (dark/light mode, text size, night light…) with `setting_set`, "
                 "not gsettings in a script; for a change that should last a while give it `for_seconds` instead "
-                "of waiting. Prefer reversible actions; `setting_set` returns the old value.")
+                "of waiting. Prefer reversible actions; `setting_set` returns the old value. For devices plugged "
+                "in (phones, boards, sensors, displays, keyboards, sound, Bluetooth) use KimiLM's `devices` and "
+                "`device_control`; `device_inspect` here is for the drivers of one bus address. A command-line "
+                "program that is missing is installed with KimiLM's `install_program` (into KimiLM's toolbox); "
+                "`app_install` is for Flathub apps.")
 
 
 # ------------------------------------------------------------------------------------------------- protocol
