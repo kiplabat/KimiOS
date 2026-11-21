@@ -19,6 +19,7 @@ from __future__ import annotations
 import configparser
 import fnmatch
 import json
+import re
 import os
 import platform
 import shutil
@@ -28,7 +29,7 @@ import sys
 import time
 from pathlib import Path
 
-VERSION = "0.6.0"
+VERSION = "0.7.0"
 ROOT = Path(os.environ.get("KIMIOS_ROOT", "/"))        # tests point this at a fake /sys and /proc
 HARDWARE_JSON = Path(os.environ.get("KIMIOS_HARDWARE_JSON", "/var/lib/kimios/hardware.json"))
 TELEMETRY_JSON = Path(os.environ.get("KIMIOS_TELEMETRY_JSON", "/run/kimios/telemetry.json"))   # kimi-telemetry (0.6.0)
@@ -520,16 +521,40 @@ def tool_setting_get(schema, key):
     return {"schema": schema, "key": key, "value": out.strip()}
 
 
-def tool_setting_set(schema, key, value):
+def tool_setting_set(schema, key, value, for_seconds=None):
     if not _allowed(schema, key):
         allowed = "; ".join(f"{s}: {', '.join(k)}" for s, k in SETTINGS_ALLOWED)
         raise ToolError(f"{schema} {key} is not a setting agents may change. Allowed: {allowed}")
+    seconds = None
+    if for_seconds not in (None, "", 0, "0"):
+        try:
+            seconds = int(float(for_seconds))
+        except (TypeError, ValueError):
+            raise ToolError("for_seconds must be a number of seconds") from None
+        if not 1 <= seconds <= 7 * 86400:
+            raise ToolError("for_seconds must be between 1 second and 7 days")
     old = tool_setting_get(schema, key)["value"]
     code, _, err = run(["gsettings", "set", schema, key, str(value)])
     if code != 0:
         raise ToolError(err.strip()[:200] or "the value was refused")
-    return {"schema": schema, "key": key, "old": old, "new": tool_setting_get(schema, key)["value"],
-            "undo": f"setting_set {schema} {key} {old}"}
+    out = {"schema": schema, "key": key, "old": old, "new": tool_setting_get(schema, key)["value"],
+           "undo": f"setting_set {schema} {key} {old}"}
+    if seconds:
+        # 0.7.0: put the old value back later with a transient user timer, so nothing has to wait for it (an agent
+        # used to sleep in a script). It survives KimiLM closing; it does not survive logging out.
+        unit = "kimios-revert-" + re.sub(r"[^a-z0-9]+", "-", f"{schema}-{key}".lower()).strip("-")[:80]
+        run(["systemctl", "--user", "stop", f"{unit}.timer", f"{unit}.service"])   # a newer change replaces it
+        code, _, err = run(["systemd-run", "--user", "--collect", f"--unit={unit}", f"--on-active={seconds}s",
+                            "--timer-property=AccuracySec=1s",
+                            f"--description=KimiOS: put {schema} {key} back to {old}",
+                            "gsettings", "set", schema, key, old])
+        when = time.strftime("%H:%M:%S", time.localtime(time.time() + seconds))
+        if code == 0:
+            out.update(reverts_at=when, revert_unit=f"{unit}.timer")
+        else:
+            out["revert_failed"] = (err.strip()[:200] or "systemd-run failed") + \
+                f"; change it back yourself with {out['undo']}"
+    return out
 
 
 # ------------------------------------------------------------------------------------------------- drives
@@ -687,9 +712,13 @@ TOOLS = {
     "launch_app": (tool_launch_app, "Start an installed app by its id (from the software tool).",
                    _schema({"app_id": S}, ("app_id",)), _ann(False)),
     "notify": (tool_notify, "Show a desktop notification.", _schema({"title": S, "body": S}, ("title",)), _ann(False)),
-    "setting_set": (tool_setting_set, "Change an allowed desktop setting (dark mode, text size, night light, "
-                    "touchpad, power, keyboard layouts…). Returns the old value so it can be undone.",
-                    _schema({"schema": S, "key": S, "value": S}, ("schema", "key", "value")), _ann(False)),
+    "setting_set": (tool_setting_set, "Change an allowed desktop or display setting: dark or light mode (colour "
+                    "scheme, theme: org.gnome.desktop.interface color-scheme 'prefer-dark' / 'default'), text size, "
+                    "fonts, wallpaper, night light, screen blank, touchpad, mouse, power, keyboard layouts… Returns "
+                    "the old value. for_seconds: change it only for that long; the old value comes back by itself "
+                    "(no need to wait or write a script).",
+                    _schema({"schema": S, "key": S, "value": S, "for_seconds": {"type": "integer"}},
+                            ("schema", "key", "value")), _ann(False)),
     "mount_drive": (tool_mount_drive, "Mount a drive by its label (from the drives tool), as the file manager does.",
                     _schema({"label": S}, ("label",)), _ann(False)),
     "app_install": (tool_app_install, "Install an app from Flathub for this user (by its app id).",
@@ -728,7 +757,9 @@ INSTRUCTIONS = ("KimiOS is the operating system this agent runs on. Use these to
                 "`performance` for how busy the computer is right now (processor, graphics, watts, heat). For "
                 "anything that controls a device (heater, motor, fan, pump: PI/PID tuning, on/off with a band) use "
                 "`control_identify`, `control_tune` and `control_simulate` rather than writing your own code. "
-                "Prefer reversible actions; `setting_set` returns the old value.")
+                "Change desktop and display settings (dark/light mode, text size, night light…) with `setting_set`, "
+                "not gsettings in a script; for a change that should last a while give it `for_seconds` instead "
+                "of waiting. Prefer reversible actions; `setting_set` returns the old value.")
 
 
 # ------------------------------------------------------------------------------------------------- protocol

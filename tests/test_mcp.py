@@ -181,6 +181,24 @@ class ToolTest(unittest.TestCase):
         self.assertEqual((r["old"], r["new"]), ("'default'", "'prefer-dark'"))
         self.assertIn(["gsettings", "set", "org.gnome.desktop.interface", "color-scheme", "prefer-dark"], calls)
 
+    def test_a_setting_can_be_changed_for_a_while(self):
+        calls = []
+
+        def fake_run(cmd, timeout=20, input_text=None):
+            calls.append(cmd)
+            if cmd[:2] == ["gsettings", "get"]:
+                return 0, ("'default'\n" if any(c[:2] == ["gsettings", "set"] for c in calls[:-1]) else "'prefer-dark'\n"), ""
+            return 0, "", ""
+        with mock.patch.object(mcp, "run", fake_run):
+            r = mcp.tool_setting_set("org.gnome.desktop.interface", "color-scheme", "default", for_seconds=60)
+        self.assertEqual((r["old"], r["new"]), ("'prefer-dark'", "'default'"))
+        self.assertTrue(r["reverts_at"] and r["revert_unit"].startswith("kimios-revert-org-gnome-desktop-interface"))
+        timer = next(c for c in calls if c[0] == "systemd-run")
+        self.assertIn("--on-active=60s", timer)
+        self.assertEqual(timer[-5:], ["gsettings", "set", "org.gnome.desktop.interface", "color-scheme", "'prefer-dark'"])
+        with mock.patch.object(mcp, "run", fake_run), self.assertRaises(mcp.ToolError):
+            mcp.tool_setting_set("org.gnome.desktop.interface", "color-scheme", "default", for_seconds=-5)
+
     def test_drives_and_mount(self):
         lsblk = {"blockdevices": [{"path": "/dev/sda", "type": "disk", "fstype": None, "children": [
             {"path": "/dev/sda3", "label": None, "size": "317.6G", "fstype": "crypto_LUKS", "mountpoints": [None],
