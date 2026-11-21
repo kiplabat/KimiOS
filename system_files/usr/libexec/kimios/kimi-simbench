@@ -1,0 +1,8 @@
+#!/usr/bin/python3
+"""KimiOS 0.9.0: the simbench service (see kimios_bench.py)."""
+import sys
+
+sys.path.insert(0, "/usr/libexec/kimios")
+import kimios_bench  # noqa: E402
+
+sys.exit(kimios_bench.main())

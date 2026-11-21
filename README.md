@@ -55,6 +55,14 @@ gives the signed-in user access to them (`70-kimios-devices.rules`) and ships ad
 Programs an agent needs and that are not installed go into KimiLM's own toolbox (`kimilm-tools`), with no password;
 the toolbox is made in the background after the first login (`kimios-toolbox.service`).
 
+Making devices do what you ask (0.9.0): `kimi-simbench` runs simulated devices (a two-compartment fridge, a heated
+room, an air sensor) on serial ports, and `kimi-envelope` is the guard between them and agents. An agent reads a
+device's datasheet, writes its driver as a manifest and tests it, records step experiments, fits a model, checks
+a controller (for example "top at 4 °C, bottom at −18 °C") and starts it; the guard applies the datasheet's limits
+on every tick whatever is asked, and falls back to the device's own controller, or to safe values, when
+something fails. Tools: `bench`, `driver`, `bench_experiment`, `controller`, `bench_event`. Watch it in KimiLM's
+Devices. Remove the simulations with `sudo systemctl disable --now kimi-simbench`.
+
 ## Develop
 
 ```bash
