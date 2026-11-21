@@ -932,6 +932,16 @@ INSTRUCTIONS = ("KimiOS is the operating system this agent runs on. Use these to
                 "output back, its events say why.")
 
 
+def _listed(name, description, schema, ann):
+    """A tool as tools/list gives it. physicalHint is not an MCP annotation, so it travels in _meta (0.9.0)."""
+    ann = dict(ann)
+    out = {"name": name, "description": description, "inputSchema": schema}
+    if ann.pop("physicalHint", False):
+        out["_meta"] = {"kimios/physical": True}
+    out["annotations"] = ann
+    return out
+
+
 # ------------------------------------------------------------------------------------------------- protocol
 def handle(msg):
     """One JSON-RPC message in, the reply out (None for notifications)."""
@@ -948,8 +958,7 @@ def handle(msg):
         elif method == "ping":
             result = {}
         elif method == "tools/list":
-            result = {"tools": [{"name": n, "description": d, "inputSchema": s, "annotations": a}
-                                for n, (_, d, s, a) in TOOLS.items()]}
+            result = {"tools": [_listed(n, d, s, a) for n, (_, d, s, a) in TOOLS.items()]}
         elif method == "tools/call":
             params = msg.get("params") or {}
             name, args = params.get("name"), params.get("arguments") or {}

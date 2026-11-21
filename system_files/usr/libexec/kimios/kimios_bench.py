@@ -242,7 +242,9 @@ class Fridge(SimDevice):
                            "min_off_s": 10, "safe": 0},
             },
             "trips": [{"sensor": "t_bottom", "below": -30, "force": {"compressor": 0},
-                       "about": "freezer too cold"}],
+                       "about": "freezer too cold"},
+                      {"sensor": "t_top", "below": -1, "force": {"damper": 0},
+                       "about": "fresh food would freeze"}],
             "stale_s": 90,
             "default": {"about": "the appliance's own thermostat", "period_s": 10, "loops": [
                 {"name": "freezer", "sensor": "t_bottom", "output": "compressor", "setpoint": -16, "band": 4,

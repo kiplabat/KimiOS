@@ -149,6 +149,8 @@ class GuardTest(unittest.TestCase):
         out, notes = g.apply({"compressor": 1}, {"t_bottom": -31}, t + 1000, 10)
         self.assertEqual(out["compressor"], 0)
         self.assertTrue(any("freezer too cold" in n for n in notes))
+        out, notes = g.apply({"damper": 1}, {"t_top": -2}, t + 2000, 10)
+        self.assertEqual(out["damper"], 0)                              # fresh food would freeze
         room = E.Guard(B.make("room").datasheet())
         out, notes = room.apply({"heater": 5}, {"temp": 20}, 0, 10)
         self.assertEqual(out["heater"], 1.0)
@@ -287,6 +289,11 @@ class Services(unittest.TestCase):
             ann = {n: a for n, (_, _, _, a) in mcp.TOOLS.items()}
             self.assertTrue(ann["controller"]["physicalHint"] and ann["bench_experiment"]["physicalHint"])
             self.assertTrue(ann["bench"]["readOnlyHint"])
+            listed = {t["name"]: t for t in mcp.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+                      ["result"]["tools"]}
+            self.assertEqual(listed["controller"]["_meta"], {"kimios/physical": True})
+            self.assertNotIn("physicalHint", listed["controller"]["annotations"])
+            self.assertNotIn("_meta", listed["bench"])
             srv.shutdown()
             ctl.shutdown()
             bench_.stop.set()
