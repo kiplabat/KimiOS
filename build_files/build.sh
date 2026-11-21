@@ -21,7 +21,9 @@ else
 fi
 
 chmod 0755 /usr/libexec/kimios/kimios-session /usr/libexec/kimios/kimi-hwprobe /usr/libexec/kimios/kimios-mcp \
-  /usr/libexec/kimios/kimi-telemetry /usr/libexec/kimios/kimi-simbench /usr/libexec/kimios/kimi-envelope
+  /usr/libexec/kimios/kimi-telemetry /usr/libexec/kimios/kimi-simbench /usr/libexec/kimios/kimi-envelope \
+  /usr/libexec/kimios/kimios-device
+ln -sf /usr/libexec/kimios/kimios-device /usr/bin/kimios-device   # 0.10.0: register real devices (sudo)
 
 # KimiLM (docs/SCOPE.md Phase 1): the Linux build from KimiLM's GitHub releases.
 # Before the first release exists (HTTP 404) the image is built without it and the session opens GNOME.

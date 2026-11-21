@@ -277,8 +277,17 @@ outside KimiOS:
   food are absorbed; a dead freezer sensor sends it to fallback and then to safe.
   The guarantee is in the limits: no driver or controller can take a device past its datasheet. Approving a first
   run is the app's step (KimiLM), not a security boundary: anything the signed-in user can run, an agent of theirs
-  can. Real devices join the same way, with a datasheet that the envelope reads from the system (next: claim
-  their ports from `uaccess`, so only the envelope can open them).
+  can. Real devices join the same way, with a datasheet that the envelope reads from the system.
+- **0.10.0: real devices join through a person.** `sudo kimios-device register FILE` checks the device's
+  datasheet (the limits the guard will hold it to: sensor ranges and allowed set points, output timing, safe
+  values, trips, its own controller), writes `/etc/kimios/devices/<id>.json`, and writes a udev rule that gives the
+  device's port to the envelope alone (`GROUP=kimi-envelope`, `TAG-="uaccess"`: the signed-in session, and so any
+  agent, loses direct access) at `/dev/kimios/<id>`. Agents cannot register a device or change its limits (sudo).
+  From there it is the same path as a simulated device: a driver manifest tested and promoted, experiments,
+  controllers inside the guard, fallback and safe values; raw commands are refused, and KimiLM asks a person
+  before every experiment or controller start on it. A registered device that is unplugged is listed as not
+  connected; a registration with a bad datasheet is listed with its problems and not run. The envelope and the
+  bench now run as a fixed system user `kimi-envelope` (sysusers.d), so udev can give it a real port.
 - KimiOS Edge firmware for one microcontroller family.
 - Opt-in registry for drivers and skills.
 

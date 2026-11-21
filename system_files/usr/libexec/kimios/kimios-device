@@ -1,0 +1,129 @@
+#!/usr/bin/python3
+"""kimios-device: register a real device with KimiOS's envelope (0.10.0).
+
+A real device that moves, heats, cools or switches something joins the guard only through a person with
+administrator rights: they write (or check) its datasheet, the limits the envelope will hold it to, and register
+it. Registering writes /etc/kimios/devices/<id>.json and a udev rule that gives the device's port to the envelope
+alone (taken from the signed-in session), at /dev/kimios/<id>. Agents cannot do this: it needs sudo.
+
+  kimios-device template                 a datasheet to start from (a fridge-like example)
+  kimios-device check FILE               what is wrong with a registration file, if anything
+  sudo kimios-device register FILE       register (or update) the device; the envelope picks it up in seconds
+  sudo kimios-device unregister ID       remove it (its port goes back to the session)
+  kimios-device list                     registered devices and whether each is plugged in
+"""
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import kimios_envelope as E  # noqa: E402
+
+RULES = Path(os.environ.get("KIMIOS_UDEV_RULES", "/etc/udev/rules.d/71-kimios-claimed.rules"))
+
+TEMPLATE = {
+    "id": "kitchen-fridge",
+    "match": {"vendor_id": "1a86", "product_id": "7523", "serial": ""},
+    "datasheet": {
+        "model": "Kitchen fridge (controller board on USB serial)", "kind": "appliance", "risk": "physical",
+        "about": "What it is and how its parts work together, in a few sentences.",
+        "sensors": {"t_top": {"unit": "degC", "about": "fresh food compartment", "valid": [-40, 60],
+                              "setpoints": [1, 8]},
+                    "t_bottom": {"unit": "degC", "about": "freezer", "valid": [-45, 60], "setpoints": [-24, -15]}},
+        "outputs": {"compressor": {"type": "bool", "about": "compressor relay", "min_on_s": 180, "min_off_s": 360,
+                                   "max_starts_per_hour": 6, "safe": 0}},
+        "trips": [{"sensor": "t_bottom", "below": -30, "force": {"compressor": 0}, "about": "freezer too cold"}],
+        "stale_s": 120,
+        "default": {"period_s": 10, "loops": [{"name": "freezer", "sensor": "t_bottom", "output": "compressor",
+                                               "setpoint": -18, "band": 3, "action": "cool"}]},
+    },
+}
+
+
+def load(path):
+    try:
+        return json.loads(Path(path).read_text())
+    except (OSError, ValueError) as exc:
+        sys.exit(f"{path}: {exc}")
+
+
+def problems(reg):
+    errs = []
+    if not E.NAME.match(str(reg.get("id", "")).replace("-", "_")):
+        errs.append("id: lower-case letters, digits, - and _")
+    if not (reg.get("match") or {}).get("vendor_id") and not reg.get("port"):
+        errs.append("match: {vendor_id, product_id, serial} of its USB device (see Devices in KimiLM), or port")
+    ds = dict(reg.get("datasheet") or {})
+    ds.setdefault("id", reg.get("id"))
+    errs += E.check_datasheet(ds)
+    return errs
+
+
+def write_rules(folder):
+    lines = ["# KimiOS: real devices registered with kimios-device. Their ports belong to the envelope alone.",
+             "# Written by kimios-device; edit the registrations in /etc/kimios/devices instead."]
+    for f in sorted(Path(folder).glob("*.json")):
+        try:
+            rule = E.udev_rule(json.loads(f.read_text()))
+        except (OSError, ValueError):
+            continue
+        if rule:
+            lines.append(rule)
+    RULES.parent.mkdir(parents=True, exist_ok=True)
+    RULES.write_text("\n".join(lines) + "\n")
+    if os.environ.get("KIMIOS_NO_UDEVADM") != "1":
+        subprocess.run(["udevadm", "control", "--reload"], check=False)
+        subprocess.run(["udevadm", "trigger", "--subsystem-match=tty"], check=False)
+
+
+def main(argv):
+    if not argv or argv[0] in ("-h", "--help", "help"):
+        print(__doc__.strip())
+        return 0
+    cmd, rest = argv[0], argv[1:]
+    folder = E.REAL_DIR
+    if cmd == "template":
+        print(json.dumps(TEMPLATE, indent=1, ensure_ascii=False))
+        return 0
+    if cmd == "check":
+        errs = problems(load(rest[0]))
+        print("\n".join(f"- {e}" for e in errs) if errs else "No problems found.")
+        return 1 if errs else 0
+    if cmd == "list":
+        for f in sorted(folder.glob("*.json")) if folder.is_dir() else []:
+            reg = load(f)
+            port = E.resolve_port(reg)
+            print(f"{reg.get('id')}: {(reg.get('datasheet') or {}).get('model', '')} — "
+                  + (f"plugged in at {port}" if port else "not plugged in"))
+        return 0
+    if cmd in ("register", "unregister") and os.geteuid() != 0 and os.environ.get("KIMIOS_ALLOW_USER") != "1":
+        sys.exit(f"{cmd} changes what the guard controls: run it with sudo")
+    if cmd == "register":
+        reg = load(rest[0])
+        errs = problems(reg)
+        if errs:
+            print("Not registered:\n" + "\n".join(f"- {e}" for e in errs))
+            return 1
+        folder.mkdir(parents=True, exist_ok=True)
+        target = folder / f"{reg['id']}.json"
+        target.write_text(json.dumps(reg, indent=1, ensure_ascii=False))
+        os.chmod(target, 0o644)
+        write_rules(folder)
+        print(f"Registered {reg['id']}. Plug it in (again); the envelope runs it with its own controller until an "
+              "agent writes and tests its driver.")
+        return 0
+    if cmd == "unregister":
+        target = folder / f"{rest[0]}.json"
+        if not target.exists():
+            sys.exit(f"{rest[0]} is not registered")
+        target.unlink()
+        write_rules(folder)
+        print(f"Unregistered {rest[0]}; its port goes back to the signed-in session.")
+        return 0
+    sys.exit(f"unknown command {cmd!r}; see kimios-device --help")
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

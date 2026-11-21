@@ -63,6 +63,11 @@ on every tick whatever is asked, and falls back to the device's own controller, 
 something fails. Tools: `bench`, `driver`, `bench_experiment`, `controller`, `bench_event`. Watch it in KimiLM's
 Devices. Remove the simulations with `sudo systemctl disable --now kimi-simbench`.
 
+Real devices (0.10.0): `kimios-device template` prints a datasheet to fill in; `sudo kimios-device register FILE`
+registers the device (its port then belongs to the envelope alone, at `/dev/kimios/<id>`); `kimios-device list`;
+`sudo kimios-device unregister ID`. Agents then work with it exactly as with a simulated one, and KimiLM asks you
+before anything that moves it.
+
 ## Develop
 
 ```bash
