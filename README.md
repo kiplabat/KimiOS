@@ -48,6 +48,13 @@ files and apps, change allowed desktop settings (each change reports the old val
 notifications and install or remove Flathub apps. For devices that heat, cool or move, agents can learn how a
 device responds from recorded data, tune a controller and try it in simulation first (`control_*` tools).
 
+Devices you plug in (0.8.0, with KimiLM 2.29.0): phones (adb), Raspberry Pi and other boards, sensors, displays,
+keyboard-and-mouse dongles, sound and Bluetooth devices are announced when they arrive and shown in KimiLM's
+Devices with their drivers and what they can do; agents use them through `devices` and `device_control`. KimiOS
+gives the signed-in user access to them (`70-kimios-devices.rules`) and ships adb, libimobiledevice and ddcutil.
+Programs an agent needs and that are not installed go into KimiLM's own toolbox (`kimilm-tools`), with no password;
+the toolbox is made in the background after the first login (`kimios-toolbox.service`).
+
 ## Develop
 
 ```bash

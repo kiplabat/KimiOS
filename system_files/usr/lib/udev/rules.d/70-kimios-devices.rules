@@ -1,0 +1,24 @@
+# KimiOS 0.8.0: the signed-in user (and so KimiLM, which runs as that user) may open the devices people plug in to
+# be controlled: phones over adb, boards and sensors on serial ports, microcontrollers being flashed, and the
+# display's DDC/CI channel. "uaccess" gives the active local session access and takes it away when it ends;
+# nothing is opened to other users or to remote logins. Read before 73-seat-late.rules, which applies the tag.
+
+# Android phones and tablets with USB debugging (adb) or in fastboot
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ENV{ID_USB_INTERFACES}=="*:ff4201:*", TAG+="uaccess"
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ENV{ID_USB_INTERFACES}=="*:ff4203:*", TAG+="uaccess"
+
+# Serial ports of boards and sensors (USB CDC ACM, USB-serial chips)
+SUBSYSTEM=="tty", KERNEL=="ttyACM[0-9]*", TAG+="uaccess"
+SUBSYSTEM=="tty", KERNEL=="ttyUSB[0-9]*", TAG+="uaccess"
+
+# Microcontroller boards, for flashing and their own USB protocols: Raspberry Pi (Pico, RP2040/RP2350), Arduino,
+# Espressif, Adafruit, SparkFun, Teensy, micro:bit, and the USB-serial chips boards use (CH340, CP210x, FTDI, PL2303)
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="2e8a|2341|2a03|303a|239a|1b4f|16c0|0d28|1a86|10c4|0403|067b", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="2e8a|2341|2a03|303a|239a|1b4f|16c0|0d28", TAG+="uaccess"
+
+# A Raspberry Pi in USB gadget mode (network or composite gadget)
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="0525", ATTR{idProduct}=="a4a2", TAG+="uaccess"
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="1d6b", ATTR{idProduct}=="0104", TAG+="uaccess"
+
+# External displays' brightness and input (DDC/CI over I2C, used by ddcutil)
+SUBSYSTEM=="i2c-dev", KERNEL=="i2c-[0-9]*", TAG+="uaccess"

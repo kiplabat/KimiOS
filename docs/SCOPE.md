@@ -221,6 +221,24 @@ outside KimiOS:
   laptop's unclaimed list it tells the Synaptics fingerprint reader (user-space, fprintd) from a chipset memory
   controller that needs nothing.
 - Test bench: a USB sensor, a serial device and a GPIO board (for example a Raspberry Pi as a second node).
+- **Started (0.8.0, with KimiLM 2.29.0): attached devices understood and controlled.** Plug in a phone, a Raspberry
+  Pi, a sensor, a display, a keyboard-and-mouse dongle or connect a Bluetooth headset: KimiLM sees it within a few
+  seconds, says what it is and what it can do (a notification, and Devices), and agents reach it through `devices`
+  and `device_control`. What a device is comes from what it says about itself (USB classes and interfaces, vendor
+  ids, EDID, BlueZ, the sound server); for each one KimiLM shows the kernel driver, the kernel modules that match,
+  the programs that control it and whether they are installed, and whether the signed-in user may open it.
+  Actions: a phone through adb (files, screenshots, apps, commands), a display's brightness (logind for the
+  built-in screen, DDC/CI for external ones), sound volume and output, Bluetooth connect and disconnect, a serial
+  port read and written, a Pico flashed with a .uf2, sensor readings, a camera picture. KimiOS's part: udev rules
+  that give the signed-in user (and nobody else) access to adb phones, serial ports, boards and DDC/CI
+  (`70-kimios-devices.rules`, `uaccess`), and the programs in the image (android-tools, libimobiledevice, ddcutil).
+  Writing to a serial port or flashing a board asks every time, even with auto-approve, unless the user marks that
+  device as safe to control (principle 5).
+- **Programs agents need are installed, not asked for (0.8.0).** The core is read-only, so a command-line program an
+  agent needs goes into a toolbox container of KimiLM's own (`kimilm-tools`, `dnf` without a password), reached
+  through small launchers on KimiLM's PATH; apps come from Flathub for the user; Python and Node packages go into
+  KimiLM's own folder; the browser the browser tools drive is downloaded into the user's cache when it is first
+  missing. `kimios-toolbox.service` (user) makes the toolbox in the background after the first login.
 
 ### Phase 4 — Skill learning and Edge
 
@@ -273,8 +291,8 @@ system_files/                 files copied into / of the image
   usr/share/kimilm/plugins/   the KimiOS plugin KimiLM loads (points at kimios-mcp)
   usr/share/polkit-1/rules.d/ administrators mount internal drives without a password
   usr/share/wayland-sessions/ kimios.desktop
-  usr/lib/systemd/            kimilm.slice (user), kimi-hwprobe.service (system)
-  usr/lib/udev/rules.d/       re-probe on hot-plug
+  usr/lib/systemd/            kimilm.slice and kimios-toolbox.service (user), kimi-hwprobe.service (system)
+  usr/lib/udev/rules.d/       re-probe on hot-plug; access to plugged-in devices for the signed-in user
 tests/                        unit tests (no root needed)
 .github/workflows/build.yml   tests, image build, push to GHCR
 docs/SCOPE.md                 this document
