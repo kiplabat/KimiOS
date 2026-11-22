@@ -193,6 +193,7 @@ look (`machine`, `device_inspect`, `abilities`, `system_status`, `os_status`, `s
 remove (`app_remove`). MCP annotations mark read-only and destructive tools; KimiLM's approval mode decides what
 asks first. The registry reads desktop entries (system, user, Flatpak) and, on request, matching commands.
 A polkit rule lets administrators mount internal drives without a password (KimiLM mounts the drive a model is on).
+
 **0.12.0: the installer ISO.** `.github/workflows/iso.yml` builds an x86_64 installer with image-builder's
 `generic-iso` (bootc-image-builder's `anaconda-iso` is legacy upstream, installs to the first disk it finds, and has
 no Fedora 45 repositories). The ISO boots into `iso/Containerfile.installer`: Anaconda's graphical installer on
