@@ -1,0 +1,7 @@
+label: "KimiOS-Installer"
+grub2:
+  timeout: 10
+  entries:
+    - name: "Install KimiOS"
+      linux: "/images/pxeboot/vmlinuz inst.stage2=hd:LABEL=KimiOS-Installer console=tty0 inst.graphical rhgb quiet"
+      initrd: "/images/pxeboot/initrd.img"

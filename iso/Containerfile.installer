@@ -33,17 +33,8 @@ RUN dnf5 install -qy \
 
 RUN mkdir -p /boot/efi && cp -ra /usr/lib/efi/*/*/EFI /boot/efi
 
-# the ISO's label and boot menu
-RUN mkdir -p /usr/lib/image-builder/bootc
-COPY <<EOT /usr/lib/image-builder/bootc/iso.yaml
-label: "KimiOS-Installer"
-grub2:
-  timeout: 10
-  entries:
-    - name: "Install KimiOS"
-      linux: "/images/pxeboot/vmlinuz inst.stage2=hd:LABEL=KimiOS-Installer console=tty0 inst.graphical rhgb quiet"
-      initrd: "/images/pxeboot/initrd.img"
-EOT
+# the ISO's label and boot menu (files/: no heredocs, the build runner's podman does not read them)
+COPY files/iso.yaml /usr/lib/image-builder/bootc/iso.yaml
 
 # what to install: KimiOS from the copy inside the ISO; updates from the registry. Nothing else: Anaconda asks
 RUN mkdir -p /usr/share/anaconda && \
@@ -65,23 +56,12 @@ RUN mv /usr/share/anaconda/list-harddrives-stub /usr/bin/list-harddrives && \
 
 RUN ln -s /usr/lib/systemd/system/anaconda-shell@.service /usr/lib/systemd/system/autovt@.service
 
-RUN mkdir -p /usr/lib/systemd/logind.conf.d
-COPY <<EOT /usr/lib/systemd/logind.conf.d/anaconda-shell.conf
-[Login]
-ReserveVT=2
-EOT
+COPY files/anaconda-shell.conf /usr/lib/systemd/logind.conf.d/anaconda-shell.conf
 
 RUN mkdir -p "$(realpath /root)" && \
     kernel=$(kernel-install list --json pretty | jq -r '.[] | select(.has_kernel == true) | .version') && \
     DRACUT_NO_XATTR=1 dracut --force -v --zstd --reproducible --no-hostonly \
       --add "anaconda" "/usr/lib/modules/${kernel}/initramfs.img" "${kernel}"
 
-RUN mkdir -p /etc/systemd/user/pipewire.service.d/ /etc/systemd/user/pipewire.socket.d/
-COPY <<EOT /etc/systemd/user/pipewire.service.d/allowroot.conf
-[Unit]
-ConditionUser=
-EOT
-COPY <<EOT /etc/systemd/user/pipewire.socket.d/allowroot.conf
-[Unit]
-ConditionUser=
-EOT
+COPY files/allowroot.conf /etc/systemd/user/pipewire.service.d/allowroot.conf
+COPY files/allowroot.conf /etc/systemd/user/pipewire.socket.d/allowroot.conf

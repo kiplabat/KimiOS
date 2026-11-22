@@ -18,7 +18,8 @@ class Installer(unittest.TestCase):
         self.assertIn("ARG PAYLOAD=ghcr.io/kiplabat/kimios:latest", self.cf)    # updates come from the registry
         for cmd in ("clearpart", "autopart", "zerombr", "ignoredisk", "inst.ks=", "inst.text", "inst.cmdline"):
             self.assertNotIn(cmd, self.cf, cmd)
-        self.assertIn("inst.graphical", self.cf)
+        self.assertIn("inst.graphical", (REPO / "iso/files/iso.yaml").read_text())
+        self.assertNotIn("<<EOT", self.cf)                    # the runner's podman does not read heredocs
 
     def test_the_workflow_embeds_kimios_and_checks_the_installer(self):
         self.assertIn("--bootc-ref localhost/kimios-installer", self.wf)
