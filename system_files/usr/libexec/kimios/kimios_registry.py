@@ -465,6 +465,21 @@ def describe(index, kind, entry_id):
     return {k: v for k, v in e.items()}
 
 
+def _desktop_apps():
+    """The apps, read the way kimios-mcp reads them (0.12.1: the terminal command listed no apps)."""
+    import importlib.machinery
+    import importlib.util
+    here = Path(__file__).resolve().parent / "kimios-mcp"
+    try:
+        loader = importlib.machinery.SourceFileLoader("kimios_mcp_apps", str(here))
+        spec = importlib.util.spec_from_loader("kimios_mcp_apps", loader)
+        mod = importlib.util.module_from_spec(spec)
+        loader.exec_module(mod)
+        return mod.desktop_entries()
+    except Exception:
+        return None
+
+
 def main(argv=None):
     import argparse
     import sys
@@ -477,11 +492,12 @@ def main(argv=None):
     d.add_argument("kind", choices=KINDS)
     d.add_argument("id")
     a = ap.parse_args(argv)
+    apps = _desktop_apps()
     if a.cmd == "refresh":
-        data = load(refresh=True)
+        data = load(apps=apps, refresh=True)
         print(json.dumps({"ok": True, "counts": data["counts"], "cache": str(CACHE)}))
         return 0
-    index = load()
+    index = load(apps=apps)
     try:
         out = search(index, " ".join(a.query))[0] if a.cmd == "search" else describe(index, a.kind, a.id)
     except LookupError as exc:

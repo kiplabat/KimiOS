@@ -2,6 +2,13 @@ label: "KimiOS-Installer"
 grub2:
   timeout: 10
   entries:
+    # enforcing=0: the installer's own files carry no SELinux labels, so SELinux runs permissive there (as
+    # image-builder's default entries do); without it systemd stops with "Failed to allocate manager object".
+    # The installed system is labelled and enforcing as usual.
     - name: "Install KimiOS"
-      linux: "/images/pxeboot/vmlinuz inst.stage2=hd:LABEL=KimiOS-Installer console=tty0 inst.graphical rhgb quiet"
+      linux: "/images/pxeboot/vmlinuz inst.stage2=hd:LABEL=KimiOS-Installer console=tty0 enforcing=0 inst.graphical rhgb quiet"
+      initrd: "/images/pxeboot/initrd.img"
+    # older laptops whose graphics stall at start (a blank screen or three dots that never go)
+    - name: "Install KimiOS (basic graphics)"
+      linux: "/images/pxeboot/vmlinuz inst.stage2=hd:LABEL=KimiOS-Installer console=tty0 enforcing=0 nomodeset inst.graphical"
       initrd: "/images/pxeboot/initrd.img"
