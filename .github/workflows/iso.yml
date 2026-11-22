@@ -79,11 +79,12 @@ jobs:
           ISO=$(sudo find /mnt/iso-output -name '*.iso' | head -1)
           test -n "$ISO"
           NAME="kimios-installer-x86_64-$(date +%Y%m%d)-${GITHUB_SHA::7}.iso"
-          sudo mv "$ISO" "/mnt/$NAME"
-          sudo chown "$(id -u)" "/mnt/$NAME"
-          (cd /mnt && sha256sum "$NAME" > "$NAME.sha256")
-          ls -lh "/mnt/$NAME"
-          echo "ISO=/mnt/$NAME" >> "$GITHUB_ENV"
+          sudo mkdir -p /mnt/out && sudo chown "$(id -u)" /mnt/out
+          sudo mv "$ISO" "/mnt/out/$NAME"
+          sudo chown "$(id -u)" "/mnt/out/$NAME"
+          (cd /mnt/out && sha256sum "$NAME" > "$NAME.sha256")
+          ls -lh /mnt/out
+          echo "ISO=/mnt/out/$NAME" >> "$GITHUB_ENV"
 
       - uses: actions/upload-artifact@v4
         with:
