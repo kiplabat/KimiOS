@@ -1,0 +1,13 @@
+[Unit]
+Description=KimiOS: what the installed software can do, indexed for agents
+Documentation=https://github.com/kiplabat/KimiOS/blob/main/docs/SCOPE.md
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/kimios/kimios-registry refresh
+Nice=15
+IOSchedulingClass=idle
+
+[Install]
+# warm at login, so the first question is answered at once
+WantedBy=default.target

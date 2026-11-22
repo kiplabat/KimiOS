@@ -29,7 +29,7 @@ import sys
 import time
 from pathlib import Path
 
-VERSION = "0.11.0"
+VERSION = "0.12.0"
 ROOT = Path(os.environ.get("KIMIOS_ROOT", "/"))        # tests point this at a fake /sys and /proc
 HARDWARE_JSON = Path(os.environ.get("KIMIOS_HARDWARE_JSON", "/var/lib/kimios/hardware.json"))
 TELEMETRY_JSON = Path(os.environ.get("KIMIOS_TELEMETRY_JSON", "/run/kimios/telemetry.json"))   # kimi-telemetry (0.6.0)
@@ -462,25 +462,35 @@ def desktop_entries(dirs=None):
     return list(apps.values())
 
 
-def tool_software(query="", limit=25, commands=False):
-    q = (query or "").lower().strip()
-    apps = desktop_entries()
+def _registry():
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import kimios_registry
+    return kimios_registry
 
-    def hit(a):
-        text = " ".join([a["name"], a["about"], a["id"], *a["categories"], *a["keywords"], *a["opens"]]).lower()
-        return all(word in text for word in q.split())
-    found = [a for a in apps if not q or hit(a)]
-    result = {"apps": found[:max(1, min(int(limit or 25), 100))], "apps_total": len(apps), "matched": len(found)}
-    if commands and q:
-        cmds = set()
-        for p in os.environ.get("PATH", "/usr/bin").split(":"):
-            try:
-                cmds.update(n for n in os.listdir(p) if q in n.lower() and os.access(os.path.join(p, n), os.X_OK))
-            except OSError:
-                pass
-        result["commands"] = sorted(cmds)[:50]
-    result["how_to_use"] = "launch_app with an app's id; open a file with `open` and the default app is chosen."
-    return result
+
+def tool_software(query="", limit=25, commands=None, kinds=None, refresh=False, kind=None, id=None):
+    """0.12.0: the software capability registry: apps, commands, services, D-Bus services and plugins; with kind
+    and id, one entry in depth."""
+    if kind and id:
+        return tool_software_describe(kind, id)
+    R = _registry()
+    want = [k for k in (kinds or R.KINDS) if k in R.KINDS] or list(R.KINDS)
+    if commands is False and not kinds:          # 0.3.0's flag: apps only unless commands were asked for
+        want = [k for k in want if k != "commands"]
+    index = R.load(apps=desktop_entries(), refresh=bool(refresh))
+    found, matched = R.search(index, query, want, limit)
+    return {**found, "matched": matched, "installed": index["counts"],
+            "how_to_use": "Each entry says how to reach it. Call software again with kind and id for one entry in "
+                          "depth: a command's options (from its manual), a service's command line, a D-Bus "
+                          "service's methods, an app's permissions."}
+
+
+def tool_software_describe(kind, id):
+    R = _registry()
+    try:
+        return R.describe(R.load(apps=desktop_entries()), kind, id)
+    except LookupError as exc:
+        raise ToolError(str(exc)) from None
 
 
 def tool_launch_app(app_id):
@@ -844,9 +854,19 @@ TOOLS = {
                   "choosing a model or planning heavy work.", _schema(), _ann(True)),
     "os_status": (tool_os_status, "The KimiOS versions installed (running, staged, rollback) and how to update.",
                   _schema(), _ann(True)),
-    "software": (tool_software, "Installed apps and what they are for, the file types they open, and (with "
-                 "commands=true) command-line tools matching the query. Ask this first to find the right tool.",
-                 _schema({"query": S, "limit": {"type": "integer"}, "commands": {"type": "boolean"}}), _ann(True)),
+    "software": (tool_software, "What the installed software can do: apps (and the files they open), every "
+                 "command-line program (with what it is for), system and user services, D-Bus services and KimiLM "
+                 "plugins, each with how to reach it. Ask this first, before searching the web or installing "
+                 "anything: words of what you need (\"convert pdf\", \"screenshot\", \"bluetooth\"). kinds: apps, "
+                 "commands, plugins, services, dbus (default all). Then kind + id (from a result) for one entry in "
+                 "depth: a command's package, synopsis and options (its manual page, else --help), a service's "
+                 "command line and state, a D-Bus service's interfaces and methods (never started to be described), "
+                 "an app's Flatpak permissions. The index follows installs by itself; refresh rebuilds it now.",
+                 _schema({"query": S, "limit": {"type": "integer"}, "commands": {"type": "boolean"},
+                          "kinds": {"type": "array", "items": {"enum": ["apps", "commands", "plugins", "services",
+                                                                        "dbus"]}},
+                          "refresh": {"type": "boolean"},
+                          "kind": {"enum": ["apps", "commands", "plugins", "services", "dbus"]}, "id": S}), _ann(True)),
     "drives": (tool_drives, "Every drive and partition, mounted or not: label, size, free space, file system, "
                "where it is mounted, and which encrypted containers are unlocked. Use this rather than df or lsblk.",
                _schema(), _ann(True)),
@@ -944,7 +964,9 @@ TOOLS = {
 }
 
 INSTRUCTIONS = ("KimiOS is the operating system this agent runs on. Use these tools to learn what the computer is "
-                "and what is installed before guessing or searching the web: `software` for apps and tools, "
+                "and what is installed before guessing or searching the web: `software` for apps, commands, services, "
+                "D-Bus services and plugins (then `software` with kind and id for a command's options or a "
+                "service's methods), "
                 "`machine` for hardware, `drives` for disks, `system_status` for memory, power and network, "
                 "`performance` for how busy the computer is right now (processor, graphics, watts, heat). For "
                 "anything that controls a device (heater, motor, fan, pump: PI/PID tuning, on/off with a band) use "
@@ -955,7 +977,7 @@ INSTRUCTIONS = ("KimiOS is the operating system this agent runs on. Use these to
                 "something unfamiliar, `snapshot` take, and `snapshot` changes/restore to undo. For devices plugged "
                 "in (phones, boards, sensors, displays, keyboards, sound, Bluetooth) use KimiLM's `devices` and "
                 "`device_control`; `device_inspect` here is for the drivers of one bus address. A command-line "
-                "program that is missing is installed with KimiLM's `install_program` (into KimiLM's toolbox); "
+                "program that `software` does not find is installed with KimiLM's `install_program` (into KimiLM's toolbox); "
                 "`app_install` is for Flathub apps. "
                 "To make a device do what someone asks (cool a compartment to 4 °C, keep a room at 21 °C), work "
                 "through the bench, in order: `bench` (datasheet, then send HELP); without a driver write a "
