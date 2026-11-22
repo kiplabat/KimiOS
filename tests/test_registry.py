@@ -172,6 +172,21 @@ class Registry(unittest.TestCase):
         with self.assertRaises(LookupError):
             R.describe(idx, "commands", "not-installed")
 
+    def test_the_terminal_command_lists_apps_too(self):
+        import contextlib
+        import io
+        share = Path(os.environ["XDG_DATA_DIRS"])
+        (share / "applications").mkdir(parents=True, exist_ok=True)
+        (share / "applications/org.gnome.Papers.desktop").write_text(
+            "[Desktop Entry]\nType=Application\nName=Papers\nComment=Read documents\nExec=papers %U\n"
+            "MimeType=application/pdf;\n")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(R.main(["search", "pdf"]), 0)
+        found = json.loads(out.getvalue())
+        self.assertEqual([a["name"] for a in found["apps"]], ["Papers"])         # 0.12.1: it listed none
+        self.assertEqual(found["commands"][0]["id"], "pdftotext")
+
     def test_the_tools_in_kimios_mcp(self):
         import importlib.machinery
         import importlib.util

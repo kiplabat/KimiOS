@@ -204,6 +204,12 @@ user. The build checks that before making the ISO. Built on request and on pull 
 is a workflow artifact. Not yet: an ARM64 ISO, signed images (open decision 2); the installer still shows Fedora's
 branding.
 
+**0.12.1:** the first ISO stopped at start on a Dell ("Failed to allocate manager object", SELinux unable to label
+`/dev`): the installer's files carry no SELinux labels, and the boot entry lacked the `enforcing=0` that
+image-builder's own entries have. Both entries now have it (the installed system stays enforcing), and a second
+entry, *Install KimiOS (basic graphics)*, adds `nomodeset` for older graphics. `kimios-registry` in a terminal now
+lists apps as well.
+
 **0.12.0: the registry knows more than apps (§2.4).** `kimios_registry.py` indexes, besides desktop entries:
 every program on PATH with what it is for (the manual index, `man -k`, and, where that index is not built yet on an
 image-based system, the summary of the package that installed it); system and user services with description
