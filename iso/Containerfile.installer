@@ -31,6 +31,25 @@ RUN dnf5 install -qy \
       jq \
  && dnf5 clean all
 
+# 0.12.2: Wi-Fi in the installer. Anaconda's bootc source always asks for a network (network_required is True even
+# for an image on the stick), and Fedora's bootc base has no Wi-Fi: the NetworkManager plugin, the supplicant and
+# the firmware most laptop cards need (Intel, Atheros/Qualcomm, Broadcom, Realtek, MediaTek). Without them a laptop
+# with no Ethernet cable cannot finish the installer (seen on a Dell). --skip-unavailable: firmware package names
+# change between Fedora releases; a missing one is not a failed build.
+RUN dnf5 install -qy --skip-unavailable \
+      NetworkManager-wifi \
+      wpa_supplicant \
+      iw \
+      linux-firmware \
+      iwlwifi-mvm-firmware \
+      iwlwifi-dvm-firmware \
+      atheros-firmware \
+      brcmfmac-firmware \
+      realtek-firmware \
+      mt7xxx-firmware \
+ && rpm -q NetworkManager-wifi wpa_supplicant \
+ && dnf5 clean all
+
 RUN mkdir -p /boot/efi && cp -ra /usr/lib/efi/*/*/EFI /boot/efi
 
 # the ISO's label and boot menu (files/: no heredocs, the build runner's podman does not read them)
