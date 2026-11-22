@@ -1,9 +1,11 @@
 name: Build KimiOS installer ISO
 
-# 0.12.0 (docs/SCOPE.md Phase 2): an interactive installer, x86_64. It asks for the disk (iso/config.toml); it never
-# installs to the first disk it finds. Built on request (Actions → Build KimiOS installer ISO → Run workflow) from
-# the image already published, and on pull requests that change the installer. The ISO is a workflow artifact
-# (about 4 GB, kept 30 days; 7 for pull requests).
+# 0.12.0 (docs/SCOPE.md Phase 2): an interactive installer, x86_64. It asks for the disk; it never installs to the
+# first disk it finds. image-builder's generic-iso: the installer environment is iso/Containerfile.installer
+# (Anaconda on Fedora bootc), the payload is KimiOS from GHCR, embedded so installing needs no network.
+# (bootc-image-builder's anaconda-iso is legacy upstream and has no Fedora 45 repositories.)
+# Built on request (Actions → Build KimiOS installer ISO → Run workflow) and on pull requests that change it. The
+# ISO is a workflow artifact (kept 30 days; 7 for pull requests).
 
 on:
   workflow_dispatch:
@@ -18,29 +20,33 @@ on:
 
 env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/kimios
-  BUILDER: quay.io/centos-bootc/bootc-image-builder:latest
+  FEDORA_VERSION: "45"
+  BUILDER: ghcr.io/osbuild/image-builder-cli:latest
 
 jobs:
   iso:
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 150
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v5
 
-      - name: Free disk space
+      - name: Free disk space; keep containers on the large disk
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache /usr/local/share/boost
           sudo docker image prune --all --force || true
+          sudo mkdir -p /mnt/containers /mnt/iso-output /etc/containers
+          printf '[storage]\ndriver = "overlay"\ngraphroot = "/mnt/containers"\nrunroot = "/run/containers/storage"\n' \
+            | sudo tee /etc/containers/storage.conf
           df -h / /mnt
 
-      - name: Pull the image and the builder (root's storage, with retries)
+      - name: Pull KimiOS, the Fedora bootc base and image-builder (with retries)
         run: |
           TAG="${{ github.event.inputs.tag || 'latest' }}"
           REF="${IMAGE,,}:$TAG"
           echo "REF=$REF" >> "$GITHUB_ENV"
-          for img in "$REF" "$BUILDER"; do
+          for img in "$REF" "quay.io/fedora/fedora-bootc:$FEDORA_VERSION" "$BUILDER"; do
             for i in 1 2 3 4 5; do
               sudo podman pull --arch amd64 "$img" && break
               [ "$i" = 5 ] && exit 1
@@ -48,14 +54,28 @@ jobs:
             done
           done
 
+      - name: Build the installer environment
+        run: |
+          sudo podman build --build-arg FEDORA_VERSION="$FEDORA_VERSION" --build-arg PAYLOAD="$REF" \
+            -f iso/Containerfile.installer -t localhost/kimios-installer iso
+
+      - name: The installer only says what to install; it asks for the disk
+        run: |
+          KS=$(sudo podman run --rm localhost/kimios-installer cat /usr/share/anaconda/interactive-defaults.ks)
+          echo "$KS"
+          echo "$KS" | grep -q "^bootc --source-imgref containers-storage:$REF --target-imgref $REF$"
+          ! echo "$KS" | grep -Eq '^(clearpart|autopart|zerombr|ignoredisk|part|text|cmdline)'
+
       - name: Build the ISO
         run: |
-          sudo mkdir -p /mnt/iso-output
           sudo podman run --rm --privileged --security-opt label=type:unconfined_t \
-            -v "$PWD/iso/config.toml:/config.toml:ro" \
             -v /mnt/iso-output:/output \
-            -v /var/lib/containers/storage:/var/lib/containers/storage \
-            "$BUILDER" --type anaconda-iso --rootfs btrfs --config /config.toml "$REF"
+            -v /mnt/containers:/var/lib/containers/storage \
+            "$BUILDER" build --output-dir /output \
+              --bootc-ref localhost/kimios-installer \
+              --bootc-installer-payload-ref "$REF" \
+              --bootc-default-fs ext4 \
+              generic-iso
           ISO=$(sudo find /mnt/iso-output -name '*.iso' | head -1)
           test -n "$ISO"
           NAME="kimios-installer-x86_64-$(date +%Y%m%d)-${GITHUB_SHA::7}.iso"
@@ -64,16 +84,6 @@ jobs:
           (cd /mnt && sha256sum "$NAME" > "$NAME.sha256")
           ls -lh "/mnt/$NAME"
           echo "ISO=/mnt/$NAME" >> "$GITHUB_ENV"
-
-      - name: Check the kickstart inside the ISO asks for the disk
-        run: |
-          sudo apt-get install -y -qq p7zip-full >/dev/null
-          mkdir -p /tmp/ks && 7z x -o/tmp/ks "$ISO" '*.ks' -r >/dev/null || true
-          find /tmp/ks -name '*.ks' -exec cat {} + > /tmp/all.ks   # the builder may split it into files
-          test -s /tmp/all.ks && cat /tmp/all.ks
-          grep -q '^graphical' /tmp/all.ks
-          grep -q '^ostreecontainer' /tmp/all.ks
-          ! grep -Eq '^(clearpart|autopart|zerombr|ignoredisk|text|cmdline)' /tmp/all.ks
 
       - uses: actions/upload-artifact@v4
         with:

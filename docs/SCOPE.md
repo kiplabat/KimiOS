@@ -193,12 +193,15 @@ look (`machine`, `device_inspect`, `abilities`, `system_status`, `os_status`, `s
 remove (`app_remove`). MCP annotations mark read-only and destructive tools; KimiLM's approval mode decides what
 asks first. The registry reads desktop entries (system, user, Flatpak) and, on request, matching commands.
 A polkit rule lets administrators mount internal drives without a password (KimiLM mounts the drive a model is on).
-**0.12.0: the installer ISO.** `.github/workflows/iso.yml` builds an x86_64 installer with bootc-image-builder
-(`anaconda-iso`) from the published image, on request and on pull requests that change it; the ISO is a workflow
-artifact. bootc-image-builder's own installer installs to the first disk it finds; KimiOS's kickstart
-(`iso/config.toml`) says only `graphical`, so Anaconda asks for the disk, how to divide it and the user, and a
-`%post` step points the installed system at `ghcr.io/kiplabat/kimios:latest` for updates. The build checks the
-kickstart inside the ISO before keeping it. Not yet: an ARM64 ISO, signed images (open decision 2).
+**0.12.0: the installer ISO.** `.github/workflows/iso.yml` builds an x86_64 installer with image-builder's
+`generic-iso` (bootc-image-builder's `anaconda-iso` is legacy upstream, installs to the first disk it finds, and has
+no Fedora 45 repositories). The ISO boots into `iso/Containerfile.installer`: Anaconda's graphical installer on
+Fedora bootc, with KimiOS embedded as the payload, so installing needs no network. Anaconda is told only what to
+install (`interactive-defaults.ks`: `bootc --source-imgref containers-storage:… --target-imgref
+ghcr.io/kiplabat/kimios:latest`, so updates come from the registry); it asks for the disk, how to divide it and the
+user. The build checks that before making the ISO. Built on request and on pull requests that change it; the ISO
+is a workflow artifact. Not yet: an ARM64 ISO, signed images (open decision 2); the installer still shows Fedora's
+branding.
 
 **0.12.0: the registry knows more than apps (§2.4).** `kimios_registry.py` indexes, besides desktop entries:
 every program on PATH with what it is for (the manual index, `man -k`, and, where that index is not built yet on an
