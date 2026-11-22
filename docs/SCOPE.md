@@ -193,7 +193,12 @@ look (`machine`, `device_inspect`, `abilities`, `system_status`, `os_status`, `s
 remove (`app_remove`). MCP annotations mark read-only and destructive tools; KimiLM's approval mode decides what
 asks first. The registry reads desktop entries (system, user, Flatpak) and, on request, matching commands.
 A polkit rule lets administrators mount internal drives without a password (KimiLM mounts the drive a model is on).
-Still to do: the installer ISO.
+**0.12.0: the installer ISO.** `.github/workflows/iso.yml` builds an x86_64 installer with bootc-image-builder
+(`anaconda-iso`) from the published image, on request and on pull requests that change it; the ISO is a workflow
+artifact. bootc-image-builder's own installer installs to the first disk it finds; KimiOS's kickstart
+(`iso/config.toml`) says only `graphical`, so Anaconda asks for the disk, how to divide it and the user, and a
+`%post` step points the installed system at `ghcr.io/kiplabat/kimios:latest` for updates. The build checks the
+kickstart inside the ISO before keeping it. Not yet: an ARM64 ISO, signed images (open decision 2).
 
 **0.12.0: the registry knows more than apps (§2.4).** `kimios_registry.py` indexes, besides desktop entries:
 every program on PATH with what it is for (the manual index, `man -k`, and, where that index is not built yet on an
@@ -338,7 +343,14 @@ outside KimiOS:
 
 ## 4. Installing on the reference laptop (Phase 0)
 
-The custom ISO comes in Phase 2. Until then, install KimiOS in two steps:
+**With the KimiOS installer (0.12.0):** GitHub → KimiOS → Actions → *Build KimiOS installer ISO* → *Run
+workflow*; when it finishes, download `kimios-installer-x86_64` (a zip holding the ISO and its SHA-256), write the
+ISO to a USB stick (Fedora Media Writer, or `dd`), and boot from it. The installer asks everything: choose the disk
+and *Installation Destination* → free space or the old Windows partition, **leave the data partition (Labatt)
+alone**; Fedora's automatic partitioning uses btrfs (KimiOS's snapshots need `/var/home` on btrfs: check after the
+first boot with `stat -f -c %T /var/home`); create your user. After the first boot `bootc upgrade` takes new images from GitHub.
+
+**Or in two steps, from Fedora Silverblue:**
 
 1. Install **Fedora Silverblue 45** from the official ISO. Its installer is interactive: choose the
    free space or the old Windows partition, and **leave the data partition (Labatt) alone**. Linux reads

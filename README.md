@@ -68,6 +68,9 @@ registers the device (its port then belongs to the envelope alone, at `/dev/kimi
 `sudo kimios-device unregister ID`. Agents then work with it exactly as with a simulated one, and KimiLM asks you
 before anything that moves it.
 
+Installer (0.12.0): Actions → *Build KimiOS installer ISO* → *Run workflow* builds an x86_64 ISO (a workflow artifact).
+It asks for the disk and the user; it never installs to the first disk it finds. See docs/SCOPE.md §4.
+
 What is installed and what it can do (0.12.0): `kimios-registry search convert pdf` lists the apps, commands,
 services, D-Bus services and plugins that match, each with how to use it; `kimios-registry describe commands tar`
 shows a program's options from its manual. Agents ask the same through the `software` tool.
