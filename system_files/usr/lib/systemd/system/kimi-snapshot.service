@@ -1,0 +1,25 @@
+[Unit]
+Description=KimiOS snapshots: the home folder kept as it was before something risky (btrfs)
+Documentation=https://github.com/kiplabat/KimiOS/blob/main/docs/SCOPE.md
+# 0.11.0: KimiLM asks for a snapshot before an unattended task changes files and before removing apps; each person
+# gets only their own, and restores them themself (kimios-snapshot restore). Without btrfs nothing runs here:
+# kimios-snapshot copies the folders an action names instead.
+After=local-fs.target
+
+[Service]
+ExecStart=/usr/libexec/kimios/kimi-snapshot
+RuntimeDirectory=kimios-snapshot
+RuntimeDirectoryMode=0755
+ProtectSystem=strict
+ReadWritePaths=-/var/home
+PrivateNetwork=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+CPUQuota=20%
+Nice=10
+IOSchedulingClass=idle
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

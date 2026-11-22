@@ -1,0 +1,37 @@
+#!/bin/sh
+# KimiOS 0.11.0: get the envelope's user and driver store ready before kimi-simbench and kimi-envelope start.
+#
+# 0.10.0 moved both services from DynamicUser= to a fixed user (kimi-envelope, sysusers.d). On a system updated
+# from 0.9.0 two things could keep them from starting, and with them every simulated device from KimiLM's
+# Devices: the user did not exist yet (systemd-sysusers runs at boot only when /etc needs an update), and the
+# drivers people had promoted stayed in /var/lib/private/kimios-envelope behind a symlink. This makes the user
+# and moves the store back, keeping every driver version. Safe to run any number of times.
+set -u
+VAR_LIB="${KIMIOS_VAR_LIB:-/var/lib}"
+state="$VAR_LIB/kimios-envelope"
+private="$VAR_LIB/private/kimios-envelope"
+
+if [ -z "${KIMIOS_NO_SYSUSERS:-}" ]; then
+  systemd-sysusers kimios-envelope.conf || echo "kimios-envelope-setup: systemd-sysusers failed" >&2
+fi
+
+if [ -L "$state" ]; then                       # the DynamicUser= symlink into private/
+  rm -f "$state"
+fi
+if [ -d "$private" ]; then
+  if [ ! -e "$state" ]; then
+    mv "$private" "$state" && echo "kimios-envelope-setup: moved the driver store back to $state"
+  elif [ -d "$private/drivers" ]; then           # both exist: bring over what the new store does not have
+    mkdir -p "$state/drivers"
+    for d in "$private/drivers"/*; do
+      [ -e "$d" ] || continue
+      [ -e "$state/drivers/$(basename "$d")" ] || mv "$d" "$state/drivers/"
+    done
+    echo "kimios-envelope-setup: merged the old driver store into $state"
+  fi
+fi
+mkdir -p "$state/drivers"
+if [ -z "${KIMIOS_NO_SYSUSERS:-}" ]; then
+  chown -R kimi-envelope:kimi-envelope "$state" || echo "kimios-envelope-setup: could not give $state to kimi-envelope" >&2
+fi
+exit 0

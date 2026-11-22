@@ -55,6 +55,7 @@ class ProtocolTest(unittest.TestCase):
         self.assertIn("software", tools)
         self.assertTrue(tools["machine"]["annotations"]["readOnlyHint"])
         self.assertTrue(tools["app_remove"]["annotations"]["destructiveHint"])
+        self.assertTrue(tools["snapshot"]["annotations"]["destructiveHint"])      # 0.11.0: restore changes files
         for t in tools.values():
             self.assertEqual(t["inputSchema"]["type"], "object")
         call = replies[2]["result"]

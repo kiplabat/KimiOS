@@ -1,0 +1,8 @@
+#!/usr/bin/python3 -I
+# KimiOS 0.11.0: whole-home snapshots on btrfs for the person who asks (kimios_snapshot.Service). Runs as root,
+# because a btrfs snapshot needs it; restoring is never done here.
+import sys
+sys.path.insert(0, "/usr/libexec/kimios")
+import kimios_snapshot  # noqa: E402
+
+sys.exit(kimios_snapshot.main())

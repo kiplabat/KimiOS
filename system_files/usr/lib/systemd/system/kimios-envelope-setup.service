@@ -1,0 +1,15 @@
+[Unit]
+Description=KimiOS: the envelope's user and driver store, ready before the bench and the envelope start
+Documentation=https://github.com/kiplabat/KimiOS/blob/main/docs/SCOPE.md
+# 0.11.0: systems updated from 0.9.0 (DynamicUser=) to 0.10.0 (a fixed user) could lose their simulated devices:
+# see /usr/libexec/kimios/kimios-envelope-setup.
+After=systemd-sysusers.service local-fs.target
+Before=kimi-simbench.service kimi-envelope.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/kimios/kimios-envelope-setup
+
+[Install]
+WantedBy=multi-user.target
