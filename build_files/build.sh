@@ -11,6 +11,7 @@ PACKAGES=(
   android-tools                     # adb and fastboot
   libimobiledevice-utils usbmuxd    # ideviceinfo for iPhones and iPads
   ddcutil                           # an external display's brightness and input (DDC/CI)
+  btrfs-progs                       # 0.11.0: snapshots of the home folder before risky actions (kimi-snapshot)
 )
 
 if command -v dnf5 >/dev/null 2>&1; then
@@ -22,7 +23,9 @@ fi
 
 chmod 0755 /usr/libexec/kimios/kimios-session /usr/libexec/kimios/kimi-hwprobe /usr/libexec/kimios/kimios-mcp \
   /usr/libexec/kimios/kimi-telemetry /usr/libexec/kimios/kimi-simbench /usr/libexec/kimios/kimi-envelope \
-  /usr/libexec/kimios/kimios-device
+  /usr/libexec/kimios/kimios-device /usr/libexec/kimios/kimios-envelope-setup /usr/libexec/kimios/kimi-snapshot \
+  /usr/libexec/kimios/kimios-snapshot
+ln -sf /usr/libexec/kimios/kimios-snapshot /usr/bin/kimios-snapshot   # 0.11.0: snapshots and one-step undo
 ln -sf /usr/libexec/kimios/kimios-device /usr/bin/kimios-device   # 0.10.0: register real devices (sudo)
 
 # KimiLM (docs/SCOPE.md Phase 1): the Linux build from KimiLM's GitHub releases.
@@ -48,3 +51,5 @@ systemctl enable kimi-hwprobe.service
 systemctl enable kimi-telemetry.service   # 0.6.0: readings for KimiLM's Performance window
 systemctl --global enable kimios-toolbox.service   # 0.8.0: KimiLM's toolbox, made in the background at first login
 systemctl enable kimi-simbench.service kimi-envelope.service   # 0.9.0: simulated devices and the guard
+systemctl enable kimi-snapshot.service   # 0.11.0: snapshots of the home folder before risky actions
+systemctl enable kimios-envelope-setup.service   # 0.11.0: their user and driver store (systems updated from 0.9.0)

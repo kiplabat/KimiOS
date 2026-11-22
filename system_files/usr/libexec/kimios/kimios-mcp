@@ -29,7 +29,7 @@ import sys
 import time
 from pathlib import Path
 
-VERSION = "0.10.0"
+VERSION = "0.11.0"
 ROOT = Path(os.environ.get("KIMIOS_ROOT", "/"))        # tests point this at a fake /sys and /proc
 HARDWARE_JSON = Path(os.environ.get("KIMIOS_HARDWARE_JSON", "/var/lib/kimios/hardware.json"))
 TELEMETRY_JSON = Path(os.environ.get("KIMIOS_TELEMETRY_JSON", "/run/kimios/telemetry.json"))   # kimi-telemetry (0.6.0)
@@ -647,6 +647,30 @@ def tool_app_remove(app_id):
     return {"removed": app_id}
 
 
+# ------------------------------------------------------------------------------------------------- snapshots (0.11.0)
+def _snap():
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import kimios_snapshot
+    return kimios_snapshot
+
+
+def tool_snapshot(action, id=None, path=None, paths=None, reason=None):
+    K = _snap()
+    try:
+        if action == "take":
+            return K.take(reason or "", paths or ([path] if path else None))
+        if action == "list":
+            rows = K.snapshots()
+            return {"snapshots": [{k: m.get(k) for k in ("id", "created", "reason", "kind", "paths")} for m in rows]}
+        if action == "changes":
+            return K.changes(id or "latest", path or "~")
+        if action == "restore":
+            return K.restore(id or "latest", path)
+        raise ToolError(f"unknown action {action!r}")
+    except K.SnapshotError as exc:
+        raise ToolError(str(exc)) from None
+
+
 # ------------------------------------------------------------------------------------------------- control (Phase 4)
 def _control():
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -906,6 +930,15 @@ TOOLS = {
                     "door_open {seconds}, warm_load {compartment: top|bottom, degrees}, ambient {value}; room: "
                     "ambient {value}, door_open; any: sensor_fault {sensor, mode: dead|stuck, seconds}.",
                     _schema({"device": S, "event": S, "args": {"type": "object"}}, ("device", "event")), _ann(False)),
+    "snapshot": (tool_snapshot, "Snapshots of the home folder before something risky, and a one-step undo. action "
+                 "take: before changing or deleting many files, running an unfamiliar script or removing software "
+                 "(the whole home folder on btrfs, instantly; elsewhere give paths: the folders the action will "
+                 "change are copied); list; changes: what was added, changed and removed under path since a "
+                 "snapshot (id, or latest); restore: put path (a file or folder) back as it was in the snapshot (the "
+                 "current version is kept beside it as NAME.before-undo-TIME).",
+                 _schema({"action": {"enum": ["take", "list", "changes", "restore"]}, "id": S, "path": S,
+                          "paths": {"type": "array", "items": S}, "reason": S}, ("action",)),
+                 _ann(False, destructive=True)),
     "app_remove": (tool_app_remove, "Remove an app installed from Flathub for this user.",
                    _schema({"app_id": S}, ("app_id",)), _ann(False, destructive=True)),
 }
@@ -918,7 +951,8 @@ INSTRUCTIONS = ("KimiOS is the operating system this agent runs on. Use these to
                 "`control_identify`, `control_tune` and `control_simulate` rather than writing your own code. "
                 "Change desktop and display settings (dark/light mode, text size, night light…) with `setting_set`, "
                 "not gsettings in a script; for a change that should last a while give it `for_seconds` instead "
-                "of waiting. Prefer reversible actions; `setting_set` returns the old value. For devices plugged "
+                "of waiting. Prefer reversible actions; `setting_set` returns the old value; before changing many files or running "
+                "something unfamiliar, `snapshot` take, and `snapshot` changes/restore to undo. For devices plugged "
                 "in (phones, boards, sensors, displays, keyboards, sound, Bluetooth) use KimiLM's `devices` and "
                 "`device_control`; `device_inspect` here is for the drivers of one bus address. A command-line "
                 "program that is missing is installed with KimiLM's `install_program` (into KimiLM's toolbox); "

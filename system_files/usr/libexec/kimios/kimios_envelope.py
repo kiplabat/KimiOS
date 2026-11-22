@@ -690,6 +690,37 @@ class Envelope:
         self.runs = {}                  # id -> DeviceRun
         self.lock = threading.RLock()
         self.make_transport = transport or (lambda reg: PortTransport(reg["port"]))
+        self.problems = {}              # 0.11.0: what keeps devices from being listed or run: key -> sentence
+
+    def problem(self, key, text=None):
+        """Note (or with text=None clear) something that is wrong, for the devices op and the journal."""
+        if text is None:
+            self.problems.pop(key, None)
+            return
+        if self.problems.get(key) != text:
+            print(f"kimi-envelope: {text}", file=sys.stderr, flush=True)
+        self.problems[key] = text
+
+    def check_state(self):
+        """0.11.0: the driver store must be writable. If it is not (a state folder left by an older version, wrong
+        owner), drivers are kept under /run instead, so devices still appear and run; they are lost on restart."""
+        try:
+            (self.state / "drivers").mkdir(parents=True, exist_ok=True)
+            probe = self.state / "drivers" / ".write-test"
+            probe.write_text("ok")
+            probe.unlink()
+            self.problem("state", None)
+            return True
+        except OSError as exc:
+            spare = RUN_DIR / "state"
+            self.problem("state", f"the driver store {self.state} cannot be written ({exc.strerror or exc}); "
+                                  f"drivers are kept in {spare} until the next restart")
+            self.state = spare
+            try:
+                (self.state / "drivers").mkdir(parents=True, exist_ok=True)
+            except OSError:
+                pass
+            return False
 
     # ---------------------------------------------------------------- devices
     def scan(self):
@@ -721,19 +752,34 @@ class Envelope:
                     continue
                 regs.append({"id": reg["id"], "port": port, "datasheet": ds, "simulated": False})
             for reg in regs:
+                if not isinstance(reg, dict) or not reg.get("id") or not reg.get("port"):
+                    continue
                 seen.add(reg["id"])
                 old = self.devices.get(reg["id"])
                 if old and old["port"] == reg["port"]:
                     continue
                 if old:
                     old["transport"].close()
-                self.devices[reg["id"]] = {"datasheet": reg["datasheet"], "port": reg["port"],
-                                           "transport": self.make_transport(reg),
-                                           "simulated": reg.get("simulated", True)}
+                # 0.11.0: one device that cannot be opened or started never keeps the others from the list
+                try:
+                    transport = self.make_transport(reg)
+                except Exception as exc:
+                    seen.discard(reg["id"])
+                    self.devices.pop(reg["id"], None)
+                    self.problem(f"device:{reg['id']}", f"{reg['id']}: its port {reg['port']} cannot be opened "
+                                                         f"({type(exc).__name__}: {exc})")
+                    continue
+                self.devices[reg["id"]] = {"datasheet": reg.get("datasheet") or {}, "port": reg["port"],
+                                           "transport": transport, "simulated": reg.get("simulated", True)}
                 run = self.runs.pop(reg["id"], None)
                 if run:
                     run.stop.set()
-                self._start_if_driver(reg["id"])
+                try:
+                    self._start_if_driver(reg["id"])
+                    self.problem(f"device:{reg['id']}", None)
+                except Exception as exc:
+                    self.problem(f"device:{reg['id']}", f"{reg['id']}: its driver could not be started "
+                                                         f"({type(exc).__name__}: {exc})")
             for gone in set(self.devices) - seen:
                 dev = self.devices.pop(gone)
                 dev["transport"].close()
@@ -755,14 +801,17 @@ class Envelope:
         return d
 
     # ---------------------------------------------------------------- driver store
-    def _dir(self, device_id):
+    def _dir(self, device_id, make=False):
         p = self.state / "drivers" / device_id
-        p.mkdir(parents=True, exist_ok=True)
+        if make:                        # 0.11.0: only writing makes the folder; reading never fails on it
+            p.mkdir(parents=True, exist_ok=True)
         return p
 
     def versions(self, device_id):
         folder = self._dir(device_id)
         out = []
+        if not folder.is_dir():
+            return out
         for f in sorted(folder.glob("v*.json"), key=lambda p: int(p.stem[1:])):
             try:
                 rec = json.loads(f.read_text())
@@ -825,7 +874,11 @@ class Envelope:
             out.append({"id": did, "model": ds.get("model"), "kind": ds.get("kind"), "simulated": False,
                         "risk": ds.get("risk"), "speed": 1, "driver": self.current_version(did),
                         "mode": "not connected", "connected": False})
-        return {"devices": out, "invalid": self.invalid}
+        problems = list(self.problems.values())
+        if not any(d["simulated"] for d in self.devices.values()) and not list(self.sim_dir.glob("sim-*.json")):
+            problems.append(f"the simulated bench has no devices in {self.sim_dir}: is kimi-simbench running? "
+                            "(systemctl status kimi-simbench)")
+        return {"devices": out, "invalid": self.invalid, "problems": problems, "state": str(self.state)}
 
     def op_device(self, req):
         did = req["device"]
@@ -869,7 +922,7 @@ class Envelope:
         if not result["passed"]:
             raise EnvelopeError("the driver did not pass its test: "
                                 + "; ".join(f"{c['what']}: {c['detail']}" for c in result["checks"] if not c["ok"]))
-        folder = self._dir(did)
+        folder = self._dir(did, make=True)
         version = max([v["version"] for v in self.versions(did)] or [0]) + 1
         (folder / f"v{version}.json").write_text(json.dumps(
             {"manifest": req["manifest"], "promoted": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -892,7 +945,7 @@ class Envelope:
         man = self.manifest(did, version)
         if not man:
             raise EnvelopeError(f"there is no version {version}")
-        (self._dir(did) / "current").write_text(str(version))
+        (self._dir(did, make=True) / "current").write_text(str(version))
         run = self.runs.get(did)
         if run:
             with run.lock:
@@ -970,8 +1023,9 @@ class Envelope:
         while not stop.wait(3):
             try:
                 self.scan()
+                self.problem("scan", None)
             except Exception as exc:
-                print(f"kimi-envelope: scan failed: {exc}", file=sys.stderr, flush=True)
+                self.problem("scan", f"looking for devices failed ({type(exc).__name__}: {exc}); trying again")
             for did, run in list(self.runs.items()):
                 if not run.thread or not run.thread.is_alive():
                     run.note("the device's loop had stopped and was started again", run.clock(), 0)
@@ -1023,9 +1077,16 @@ def request(req, path=SOCKET, timeout=1000.0):
 def main(argv=None):
     env = Envelope()
     stop = threading.Event()
-    env.scan()
-    threading.Thread(target=env.watchdog, args=(stop,), daemon=True).start()
+    env.check_state()
+    # 0.11.0: the socket first, so KimiLM and the tools can always reach the envelope and hear what is wrong;
+    # a scan that fails is reported and tried again by the watchdog, never the end of the service
     server = env.serve()
+    try:
+        env.scan()
+        env.problem("scan", None)
+    except Exception as exc:
+        env.problem("scan", f"looking for devices failed ({type(exc).__name__}: {exc}); trying again")
+    threading.Thread(target=env.watchdog, args=(stop,), daemon=True).start()
     print(f"kimi-envelope: {len(env.devices)} device(s); socket {SOCKET}", flush=True)
     try:
         server.serve_forever()

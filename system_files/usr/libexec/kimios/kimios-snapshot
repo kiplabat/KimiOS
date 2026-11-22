@@ -1,0 +1,61 @@
+#!/usr/bin/python3 -I
+"""kimios-snapshot: a snapshot of your home folder before something risky, and a one-step undo (KimiOS 0.11.0).
+
+  kimios-snapshot take [--reason TEXT] [PATH...]   whole home on btrfs; else a copy of the PATHs named
+  kimios-snapshot list                             your snapshots, newest last
+  kimios-snapshot changes [ID|latest] [PATH]       what changed since (added, changed, removed files)
+  kimios-snapshot restore [ID|latest] PATH         put PATH back as it was (the current one is kept aside)
+  kimios-snapshot delete ID
+
+Output is JSON, for KimiLM and kimios-mcp; people read it too."""
+import argparse
+import json
+import os
+import sys
+
+sys.path.insert(0, os.environ.get("KIMIOS_LIBEXEC", "/usr/libexec/kimios"))
+import kimios_snapshot as K  # noqa: E402
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="kimios-snapshot", description=__doc__.split("\n")[0])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    t = sub.add_parser("take")
+    t.add_argument("--reason", default="")
+    t.add_argument("paths", nargs="*")
+    sub.add_parser("list")
+    c = sub.add_parser("changes")
+    c.add_argument("id", nargs="?", default="latest")
+    c.add_argument("path", nargs="?", default="~")
+    r = sub.add_parser("restore")
+    r.add_argument("id")
+    r.add_argument("path")
+    d = sub.add_parser("delete")
+    d.add_argument("id")
+    a = ap.parse_args(argv)
+    try:
+        if a.cmd == "take":
+            out = K.take(a.reason, a.paths)
+        elif a.cmd == "list":
+            out = {"snapshots": K.snapshots()}
+        elif a.cmd == "changes":
+            out = K.changes(a.id, a.path)
+        elif a.cmd == "restore":
+            out = K.restore(a.id, a.path)
+        else:
+            m = K.find(a.id)
+            if m["kind"] == "btrfs":
+                out = K.ask({"op": "delete", "id": m["id"]})
+            else:
+                import shutil
+                shutil.rmtree(K.copy_store() / m["id"], ignore_errors=True)
+                out = {"deleted": m["id"]}
+    except K.SnapshotError as exc:
+        print(json.dumps({"ok": False, "error": str(exc)}))
+        return 1
+    print(json.dumps({"ok": True, **out}, indent=1))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

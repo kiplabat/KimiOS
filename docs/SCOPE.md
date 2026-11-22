@@ -193,7 +193,27 @@ look (`machine`, `device_inspect`, `abilities`, `system_status`, `os_status`, `s
 remove (`app_remove`). MCP annotations mark read-only and destructive tools; KimiLM's approval mode decides what
 asks first. The registry reads desktop entries (system, user, Flatpak) and, on request, matching commands.
 A polkit rule lets administrators mount internal drives without a password (KimiLM mounts the drive a model is on).
-Still to do: snapshots before risky actions, the installer ISO, richer registry entries (D-Bus, `--help`).
+Still to do: the installer ISO, richer registry entries (D-Bus, `--help`).
+
+**0.11.0: snapshots before risky actions, one-step undo.** The system is an image (`bootc rollback` undoes an
+update); what an agent can damage is the person's own files. `kimi-snapshot`, a small root service, takes a
+read-only btrfs snapshot of `/var/home` for the person who asks (their uid, from the socket), instantly, into
+`/var/home/.kimios-snapshots` (mode 0711: each person reads their own folder in it, nobody else's); at most one
+every two minutes per person, twelve kept, a week old deleted (the newest three stay). Without btrfs the person's
+own `kimios-snapshot take PATH…` copies the folders an action names (reflinks where possible, up to 2 GB) into
+`~/.local/share/kimios/snapshots`. Undo needs no privilege and is done by the person: `kimios-snapshot changes`
+(added, changed, removed since a snapshot under a folder) and `restore` (a file or folder put back; the current
+version kept beside it as `NAME.before-undo-TIME`). Agents: the `snapshot` tool (take, list, changes, restore).
+KimiLM 2.32.0 takes one before the first change of an unattended or auto-approved reply and before tools that
+delete or overwrite, and shows Activity → Undo. `btrfs-progs` is in the image.
+
+**0.11.0 also fixes simulated devices missing after updating from 0.9.0.** 0.10.0 moved `kimi-simbench` and
+`kimi-envelope` from `DynamicUser=` to the fixed user `kimi-envelope`; on an updated system the user could be
+missing (sysusers runs at boot only when `/etc` needs an update) and the drivers people had promoted sat in
+`/var/lib/private/kimios-envelope`. `kimios-envelope-setup.service` (root, before both) makes the user and moves the
+store back, keeping every driver version. The envelope serves its socket before it looks for devices, reports what
+is wrong (`problems` in the devices op: a store it cannot write, then kept under /run; a port it cannot open; an
+empty bench) instead of exiting, and one bad device no longer hides the others.
 
 ### Phase 2b — Self-model and suggestions
 

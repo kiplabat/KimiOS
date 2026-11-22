@@ -4,8 +4,8 @@ Documentation=https://github.com/kiplabat/KimiOS/blob/main/docs/SCOPE.md
 # 0.9.0: agents reach these devices only through /run/kimios-envelope/envelope.sock; whatever they ask passes the
 # guard, which applies each device's datasheet. Agents cannot stop, change or bypass it (another user, no
 # writable code, the devices' ports are its own). Real devices: /etc/kimios/devices (kimios-device, sudo).
-After=kimi-simbench.service
-Wants=kimi-simbench.service
+After=kimi-simbench.service kimios-envelope-setup.service
+Wants=kimi-simbench.service kimios-envelope-setup.service
 
 [Service]
 ExecStart=/usr/libexec/kimios/kimi-envelope

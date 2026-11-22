@@ -4,6 +4,8 @@ Documentation=https://github.com/kiplabat/KimiOS/blob/main/docs/SCOPE.md
 # 0.9.0: devices that behave like real ones, for building and testing control without hardware. Their ports
 # belong to the envelope's user (kimi-envelope, sysusers.d), so only the envelope can drive them.
 # Not wanted: systemctl disable --now kimi-simbench
+After=kimios-envelope-setup.service
+Wants=kimios-envelope-setup.service
 
 [Service]
 ExecStart=/usr/libexec/kimios/kimi-simbench

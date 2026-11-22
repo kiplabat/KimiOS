@@ -68,6 +68,13 @@ registers the device (its port then belongs to the envelope alone, at `/dev/kimi
 `sudo kimios-device unregister ID`. Agents then work with it exactly as with a simulated one, and KimiLM asks you
 before anything that moves it.
 
+Snapshots and undo (0.11.0): before an unattended task changes files, or before software is removed, KimiLM takes a
+snapshot of your home folder (instant on btrfs, through `kimi-snapshot`; elsewhere the folders the action names are
+copied). `kimios-snapshot changes latest ~/Documents` lists what was added, changed and removed since;
+`kimios-snapshot restore ID ~/Documents/report.md` puts it back (the current version is kept beside it). Agents use
+the `snapshot` tool. If the simulated devices are missing after updating from 0.9.0, run
+`sudo systemctl restart kimios-envelope-setup kimi-simbench kimi-envelope` (0.11.0 does this at boot).
+
 ## Develop
 
 ```bash
