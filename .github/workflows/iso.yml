@@ -36,9 +36,9 @@ jobs:
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache /usr/local/share/boost
           sudo docker image prune --all --force || true
-          sudo mkdir -p /mnt/containers /mnt/iso-output /etc/containers
-          printf '[storage]\ndriver = "overlay"\ngraphroot = "/mnt/containers"\nrunroot = "/run/containers/storage"\n' \
-            | sudo tee /etc/containers/storage.conf
+          # the default storage path, on the large disk: the same path inside image-builder's container
+          sudo mkdir -p /mnt/containers /mnt/iso-output /var/lib/containers/storage
+          sudo mount --bind /mnt/containers /var/lib/containers/storage
           df -h / /mnt
 
       - name: Pull KimiOS, the Fedora bootc base and image-builder (with retries)
@@ -70,7 +70,7 @@ jobs:
         run: |
           sudo podman run --rm --privileged --security-opt label=type:unconfined_t \
             -v /mnt/iso-output:/output \
-            -v /mnt/containers:/var/lib/containers/storage \
+            -v /var/lib/containers/storage:/var/lib/containers/storage \
             "$BUILDER" build --output-dir /output \
               --bootc-ref localhost/kimios-installer \
               --bootc-installer-payload-ref "$REF" \
