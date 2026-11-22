@@ -44,6 +44,10 @@ SIM_DIR = Path(os.environ.get("KIMIOS_SIM_DIR", "/run/kimios-sim"))
 RUN_DIR = Path(os.environ.get("KIMIOS_ENVELOPE_DIR", "/run/kimios-envelope"))
 STATE_DIR = Path(os.environ.get("KIMIOS_ENVELOPE_STATE", "/var/lib/kimios-envelope"))
 SOCKET = RUN_DIR / "envelope.sock"
+# 0.10.0: real devices, registered by an administrator (kimios-device register): their datasheets are the person's
+# word, never an agent's
+REAL_DIR = Path(os.environ.get("KIMIOS_DEVICES_DIR", "/etc/kimios/devices"))
+DEV_ROOT = Path(os.environ.get("KIMIOS_DEV_ROOT", "/"))
 MAX_EXPERIMENT_S = 6 * 3600          # device seconds
 NAME = re.compile(r"^[a-z][a-z0-9_]{0,40}$")
 
@@ -114,6 +118,100 @@ class DirectTransport:
 
     def close(self):
         pass
+
+
+# ================================================================================================ datasheets
+def check_datasheet(ds):
+    """Problems with a datasheet (a real device's, written by a person; the simulator's are checked too)."""
+    errs = []
+    if not isinstance(ds, dict):
+        return ["a datasheet is a JSON object"]
+    if not NAME.match(str(ds.get("id", "")).replace("-", "_")):
+        errs.append("id: lower-case letters, digits, - and _ (e.g. kitchen-fridge)")
+    sensors, outputs = ds.get("sensors"), ds.get("outputs")
+    if not isinstance(sensors, dict) or not sensors:
+        errs.append("sensors: at least one, {name: {unit, valid: [low, high], setpoints: [low, high]}}")
+        sensors = {}
+    if not isinstance(outputs, dict):
+        errs.append("outputs: {name: {type: bool|level, ...limits, safe}} ({} for a sensor-only device)")
+        outputs = {}
+    for k, v in sensors.items():
+        if not NAME.match(k):
+            errs.append(f"sensor {k!r}: lower-case letters, digits and _")
+        rng = (v or {}).get("valid")
+        if not (isinstance(rng, list) and len(rng) == 2 and all(isinstance(x, (int, float)) for x in rng)
+                and rng[0] < rng[1]):
+            errs.append(f"sensor {k}: valid is [low, high], the range a reading can be right in")
+        sp = (v or {}).get("setpoints")
+        if sp is not None and not (isinstance(sp, list) and len(sp) == 2 and sp[0] <= sp[1]):
+            errs.append(f"sensor {k}: setpoints is [low, high]")
+    for k, v in outputs.items():
+        v = v or {}
+        if not NAME.match(k):
+            errs.append(f"output {k!r}: lower-case letters, digits and _")
+        if v.get("type") not in ("bool", "level"):
+            errs.append(f"output {k}: type is bool (on/off) or level (min…max)")
+        if "safe" not in v:
+            errs.append(f"output {k}: safe is the value it goes to when anything is wrong (usually 0)")
+        if v.get("type") == "level":
+            try:
+                if not float(v.get("min", 0)) <= float(v.get("safe", 0)) <= float(v.get("max", 1)):
+                    errs.append(f"output {k}: safe must be between min and max")
+            except (TypeError, ValueError):
+                errs.append(f"output {k}: min, max and safe are numbers")
+        for lim in ("min_on_s", "min_off_s", "max_starts_per_hour", "max_rate_per_s"):
+            if lim in v and not (isinstance(v[lim], (int, float)) and v[lim] >= 0):
+                errs.append(f"output {k}: {lim} is a number ≥ 0")
+    for i, trip in enumerate(ds.get("trips") or []):
+        if trip.get("sensor") not in sensors or not (set(trip.get("force") or {}) <= set(outputs)) or \
+                not ("below" in trip or "above" in trip):
+            errs.append(f"trips[{i}]: {{sensor, below or above, force: {{output: value}}}} naming its own sensors "
+                        "and outputs")
+    default = ds.get("default") or {"loops": []}
+    if not errs and default.get("loops"):
+        errs += [f"default: {e}" for e in check_spec(default, ds)]
+    if not isinstance(ds.get("stale_s", 60), (int, float)):
+        errs.append("stale_s is a number of seconds")
+    return errs
+
+
+def resolve_port(reg, root=None):
+    """Where a registered real device is now: /dev/kimios/<id> (made by its udev rule), else its port, else a
+    serial port whose USB device matches (vendor, product, serial). None when it is not plugged in."""
+    root = Path(root or DEV_ROOT)
+    for cand in (root / "dev/kimios" / reg["id"], Path(str(reg.get("port") or "/nonexistent"))):
+        if cand.exists():
+            return str(cand)
+    m = reg.get("match") or {}
+    if not m.get("vendor_id"):
+        return None
+    for tty in sorted((root / "sys/class/tty").glob("tty*")):
+        try:
+            real = (tty / "device").resolve()
+        except OSError:
+            continue
+        for parent in [real, *real.parents]:
+            vid = parent / "idVendor"
+            if vid.exists():
+                got = {"vendor_id": vid.read_text().strip(),
+                       "product_id": (parent / "idProduct").read_text().strip(),
+                       "serial": (parent / "serial").read_text().strip() if (parent / "serial").exists() else ""}
+                if all(not m.get(k) or str(m[k]).lower() == got[k].lower() for k in got):
+                    return str(root / "dev" / tty.name)
+                break
+    return None
+
+
+def udev_rule(reg):
+    """The rule that gives a registered device's port to the envelope alone (not the signed-in session)."""
+    m = reg.get("match") or {}
+    if not m.get("vendor_id") or not m.get("product_id"):
+        return None
+    keys = [f'ATTRS{{idVendor}}=="{m["vendor_id"]}"', f'ATTRS{{idProduct}}=="{m["product_id"]}"']
+    if m.get("serial"):
+        keys.append(f'ATTRS{{serial}}=="{m["serial"]}"')
+    return (f'SUBSYSTEM=="tty", {", ".join(keys)}, OWNER="root", GROUP="kimi-envelope", MODE="0660", '
+            f'TAG-="uaccess", SYMLINK+="kimios/{reg["id"]}"')
 
 
 # ================================================================================================ drivers
@@ -583,8 +681,11 @@ class DeviceRun:
 
 # ================================================================================================ the service
 class Envelope:
-    def __init__(self, sim_dir=SIM_DIR, state_dir=STATE_DIR, transport=None):
+    def __init__(self, sim_dir=SIM_DIR, state_dir=STATE_DIR, transport=None, real_dir=None):
         self.sim_dir, self.state = Path(sim_dir), Path(state_dir)
+        self.real_dir = Path(real_dir) if real_dir else REAL_DIR
+        self.unplugged = {}             # registered real devices that are not attached now: id -> datasheet
+        self.invalid = {}               # registrations whose datasheet has problems: file -> problems
         self.devices = {}               # id -> {"datasheet", "port", "transport"}
         self.runs = {}                  # id -> DeviceRun
         self.lock = threading.RLock()
@@ -594,11 +695,32 @@ class Envelope:
     def scan(self):
         with self.lock:
             seen = set()
+            regs = []
             for f in sorted(self.sim_dir.glob("sim-*.json")):
                 try:
-                    reg = json.loads(f.read_text())
+                    regs.append(json.loads(f.read_text()))
                 except (OSError, ValueError):
                     continue
+            self.unplugged, self.invalid = {}, {}
+            for f in sorted(self.real_dir.glob("*.json")) if self.real_dir.is_dir() else []:
+                try:
+                    reg = json.loads(f.read_text())
+                except (OSError, ValueError) as exc:
+                    self.invalid[f.name] = [f"not readable: {exc}"]
+                    continue
+                ds = reg.get("datasheet") or {}
+                ds.setdefault("id", reg.get("id"))
+                errs = check_datasheet(ds) if reg.get("id") else ["no id"]
+                if errs:
+                    self.invalid[f.name] = errs
+                    continue
+                ds.update({"simulated": False, "speed": 1})
+                port = resolve_port(reg)
+                if not port:
+                    self.unplugged[reg["id"]] = ds
+                    continue
+                regs.append({"id": reg["id"], "port": port, "datasheet": ds, "simulated": False})
+            for reg in regs:
                 seen.add(reg["id"])
                 old = self.devices.get(reg["id"])
                 if old and old["port"] == reg["port"]:
@@ -606,7 +728,8 @@ class Envelope:
                 if old:
                     old["transport"].close()
                 self.devices[reg["id"]] = {"datasheet": reg["datasheet"], "port": reg["port"],
-                                           "transport": self.make_transport(reg), "simulated": True}
+                                           "transport": self.make_transport(reg),
+                                           "simulated": reg.get("simulated", True)}
                 run = self.runs.pop(reg["id"], None)
                 if run:
                     run.stop.set()
@@ -697,8 +820,12 @@ class Envelope:
             ds = d["datasheet"]
             out.append({"id": did, "model": ds.get("model"), "kind": ds.get("kind"), "simulated": d["simulated"],
                         "risk": ds.get("risk"), "speed": ds.get("speed"), "driver": self.current_version(did),
-                        "mode": (run.status()["mode"] if run else "no driver")})
-        return {"devices": out}
+                        "mode": (run.status()["mode"] if run else "no driver"), "connected": True})
+        for did, ds in self.unplugged.items():
+            out.append({"id": did, "model": ds.get("model"), "kind": ds.get("kind"), "simulated": False,
+                        "risk": ds.get("risk"), "speed": 1, "driver": self.current_version(did),
+                        "mode": "not connected", "connected": False})
+        return {"devices": out, "invalid": self.invalid}
 
     def op_device(self, req):
         did = req["device"]

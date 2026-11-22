@@ -268,7 +268,9 @@ class Services(unittest.TestCase):
                 mcp.tool_bench("sim-fridge", send="OUTP:COMP 1")           # questions only
             self.assertTrue(mcp.tool_driver("sim-fridge", "test", FRIDGE_DRIVER)["passed"])
             self.assertEqual(mcp.tool_driver("sim-fridge", "promote", FRIDGE_DRIVER)["version"], 1)
-            out = mcp.tool_bench_experiment("sim-fridge", output="compressor", value=1, seconds=1800, after_s=600)
+            # settle with everything off first (the fridge's own thermostat may have just switched), then a step
+            out = mcp.tool_bench_experiment("sim-fridge", steps=[{"set": {"compressor": 0, "damper": 0}, "seconds": 900},
+                                                                 {"set": {"compressor": 1}, "seconds": 3600}])
             if out.get("running"):
                 time.sleep(5)
                 out = mcp.tool_bench_experiment("sim-fridge", collect=True)
