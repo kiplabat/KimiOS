@@ -31,7 +31,7 @@ In the founder's words (20 Nov 2026, lightly edited):
 |---|---|---|---|
 | Natural language is the way in | The KimiOS session: KimiLM is the desktop; every other piece is reached through it | §2 Shell | 1 (done) |
 | Everything served through natural language | OS MCP server: files, apps, settings, network, devices as tools | §2 | 2 (started) |
-| Knows what the installed tools can do | Software capability registry | §2.4 | 2 (started) |
+| Knows what the installed tools can do | Software capability registry | §2.4 | 2 (apps, commands, services, D-Bus, plugins) |
 | Understands connected devices | Hardware capability graph; driver synthesis for what has no driver | §2.1, §2.2 | 0 (done), 3 |
 | Suggests ways of working | Suggestions from what the user does, local and opt-in | §2.6 | 2b (started) |
 | Learns what it controls (robot, appliance) | Skill learning; KimiOS Edge for microcontrollers | §2.3 | 4 (started, in simulation) |
@@ -193,7 +193,29 @@ look (`machine`, `device_inspect`, `abilities`, `system_status`, `os_status`, `s
 remove (`app_remove`). MCP annotations mark read-only and destructive tools; KimiLM's approval mode decides what
 asks first. The registry reads desktop entries (system, user, Flatpak) and, on request, matching commands.
 A polkit rule lets administrators mount internal drives without a password (KimiLM mounts the drive a model is on).
-Still to do: the installer ISO, richer registry entries (D-Bus, `--help`).
+
+**0.12.0: the installer ISO.** `.github/workflows/iso.yml` builds an x86_64 installer with image-builder's
+`generic-iso` (bootc-image-builder's `anaconda-iso` is legacy upstream, installs to the first disk it finds, and has
+no Fedora 45 repositories). The ISO boots into `iso/Containerfile.installer`: Anaconda's graphical installer on
+Fedora bootc, with KimiOS embedded as the payload, so installing needs no network. Anaconda is told only what to
+install (`interactive-defaults.ks`: `bootc --source-imgref containers-storage:… --target-imgref
+ghcr.io/kiplabat/kimios:latest`, so updates come from the registry); it asks for the disk, how to divide it and the
+user. The build checks that before making the ISO. Built on request and on pull requests that change it; the ISO
+is a workflow artifact. Not yet: an ARM64 ISO, signed images (open decision 2); the installer still shows Fedora's
+branding.
+
+**0.12.0: the registry knows more than apps (§2.4).** `kimios_registry.py` indexes, besides desktop entries:
+every program on PATH with what it is for (the manual index, `man -k`, and, where that index is not built yet on an
+image-based system, the summary of the package that installed it); system and user services with description
+and state; D-Bus services on both buses, running or started on demand, with the program behind them; KimiLM
+plugins and their MCP servers. Every entry says how an agent reaches it. `software` with a `kind` and `id` goes deeper for
+one entry: a command's package, synopsis, description and options (its manual page; `--help` only when there is no
+manual, never for programs that could act instead, such as `reboot` or `dd`), a service's command line and
+documentation, a D-Bus service's interfaces and methods (with `--auto-start=no`: describing never starts a
+service), an app's Flatpak permissions. The index is cached per person with a fingerprint of the folders
+software lands in and rebuilt when one changes; `kimios-registry.path` rebuilds it as soon as a Flatpak app, a
+program in `~/.local/bin`, a user service or a plugin appears or goes. `kimios-registry search|describe|refresh`
+does the same from a terminal. Agents are told to ask `software` before searching the web or installing.
 
 **0.11.0: snapshots before risky actions, one-step undo.** The system is an image (`bootc rollback` undoes an
 update); what an agent can damage is the person's own files. `kimi-snapshot`, a small root service, takes a
@@ -325,7 +347,14 @@ outside KimiOS:
 
 ## 4. Installing on the reference laptop (Phase 0)
 
-The custom ISO comes in Phase 2. Until then, install KimiOS in two steps:
+**With the KimiOS installer (0.12.0):** GitHub → KimiOS → Actions → *Build KimiOS installer ISO* → *Run
+workflow*; when it finishes, download `kimios-installer-x86_64` (a zip holding the ISO and its SHA-256), write the
+ISO to a USB stick (Fedora Media Writer, or `dd`), and boot from it. The installer asks everything: choose the disk
+and *Installation Destination* → free space or the old Windows partition, **leave the data partition (Labatt)
+alone**; Fedora's automatic partitioning uses btrfs (KimiOS's snapshots need `/var/home` on btrfs: check after the
+first boot with `stat -f -c %T /var/home`); create your user. After the first boot `bootc upgrade` takes new images from GitHub.
+
+**Or in two steps, from Fedora Silverblue:**
 
 1. Install **Fedora Silverblue 45** from the official ISO. Its installer is interactive: choose the
    free space or the old Windows partition, and **leave the data partition (Labatt) alone**. Linux reads

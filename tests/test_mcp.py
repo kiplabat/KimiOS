@@ -158,10 +158,12 @@ class ToolTest(unittest.TestCase):
         self.assertEqual(ids, {"org.gnome.TextEditor.desktop", "kde-sub.desktop"})
         editor = next(e for e in entries if e["name"] == "Text Editor")
         self.assertEqual(editor["opens"], ["text/plain"])
-        with mock.patch.object(mcp, "desktop_entries", lambda dirs=None: entries):
-            found = mcp.tool_software("spreadsheet")
+        reg = mcp._registry()
+        with mock.patch.object(mcp, "desktop_entries", lambda dirs=None: entries), \
+                mock.patch.object(reg, "CACHE", self.root / "cache/registry.json"):
+            found = mcp.tool_software("spreadsheet", kinds=["apps"])
             self.assertEqual([a["name"] for a in found["apps"]], ["Sub App"])
-            self.assertEqual(mcp.tool_software("")["matched"], 2)
+            self.assertEqual(mcp.tool_software("", kinds=["apps"])["matched"], 2)
 
     def test_settings_outside_the_allow_list_are_refused(self):
         with self.assertRaises(mcp.ToolError) as cm:

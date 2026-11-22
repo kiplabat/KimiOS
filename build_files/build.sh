@@ -24,7 +24,8 @@ fi
 chmod 0755 /usr/libexec/kimios/kimios-session /usr/libexec/kimios/kimi-hwprobe /usr/libexec/kimios/kimios-mcp \
   /usr/libexec/kimios/kimi-telemetry /usr/libexec/kimios/kimi-simbench /usr/libexec/kimios/kimi-envelope \
   /usr/libexec/kimios/kimios-device /usr/libexec/kimios/kimios-envelope-setup /usr/libexec/kimios/kimi-snapshot \
-  /usr/libexec/kimios/kimios-snapshot
+  /usr/libexec/kimios/kimios-snapshot /usr/libexec/kimios/kimios-registry
+ln -sf /usr/libexec/kimios/kimios-registry /usr/bin/kimios-registry   # 0.12.0: what installed software can do
 ln -sf /usr/libexec/kimios/kimios-snapshot /usr/bin/kimios-snapshot   # 0.11.0: snapshots and one-step undo
 ln -sf /usr/libexec/kimios/kimios-device /usr/bin/kimios-device   # 0.10.0: register real devices (sudo)
 
@@ -49,6 +50,7 @@ fi
 
 systemctl enable kimi-hwprobe.service
 systemctl enable kimi-telemetry.service   # 0.6.0: readings for KimiLM's Performance window
+systemctl --global enable kimios-registry.path kimios-registry.service   # 0.12.0: the software registry
 systemctl --global enable kimios-toolbox.service   # 0.8.0: KimiLM's toolbox, made in the background at first login
 systemctl enable kimi-simbench.service kimi-envelope.service   # 0.9.0: simulated devices and the guard
 systemctl enable kimi-snapshot.service   # 0.11.0: snapshots of the home folder before risky actions

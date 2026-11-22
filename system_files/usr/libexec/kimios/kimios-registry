@@ -1,0 +1,8 @@
+#!/usr/bin/python3 -I
+# KimiOS 0.12.0: the software capability registry from a terminal (and for kimios-registry.service):
+#   kimios-registry refresh | search WORDS… | describe KIND ID
+import sys
+sys.path.insert(0, "/usr/libexec/kimios")
+import kimios_registry  # noqa: E402
+
+sys.exit(kimios_registry.main())

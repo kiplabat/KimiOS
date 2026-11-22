@@ -1,0 +1,16 @@
+[Unit]
+# 0.12.0: rebuild the registry soon after software is installed or removed for this person (Flatpak apps, their
+# own programs and services). System programs change with the image, at boot; the registry notices those itself.
+Description=KimiOS: notice software being installed or removed
+
+[Path]
+PathChanged=/var/lib/flatpak/exports/share/applications
+PathChanged=%h/.local/share/flatpak/exports/share/applications
+PathChanged=%h/.local/share/applications
+PathChanged=%h/.local/bin
+PathChanged=%h/.config/systemd/user
+PathChanged=%h/.local/share/kimilm/plugins
+Unit=kimios-registry.service
+
+[Install]
+WantedBy=default.target
