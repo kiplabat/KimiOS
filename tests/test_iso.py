@@ -26,6 +26,8 @@ class Installer(unittest.TestCase):
             self.assertIn("inst.graphical", ln)
         self.assertIn("nomodeset", entries[1])
         self.assertNotIn("<<EOT", self.cf)                    # the runner's podman does not read heredocs
+        for pkg in ("NetworkManager-wifi", "wpa_supplicant", "iwlwifi-mvm-firmware"):    # 0.12.2: Wi-Fi to install
+            self.assertIn(pkg, self.cf)
 
     def test_the_workflow_embeds_kimios_and_checks_the_installer(self):
         self.assertIn("--bootc-ref localhost/kimios-installer", self.wf)
