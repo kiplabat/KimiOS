@@ -404,7 +404,13 @@ Tests: `python3 -m unittest discover -s tests -v`
 ## 6. Open decisions
 
 1. **Licence** (KimiOS repository): Apache-2.0 is suggested (matches bootc tooling; patent grant).
-2. **Image signing:** cosign keys in GitHub secrets, so `bootc` can verify updates (Phase 1).
+2. **Image signing:** decided and built (0.13.0): cosign, a key pair. The private key is the repository secret
+   `SIGNING_SECRET` (its password `COSIGN_PASSWORD`); the publish job signs every published image (the image for
+   both architectures and each one's own) and verifies it. The public key is `system_files/etc/pki/containers/kimios.pub`;
+   with it in the image, `/etc/containers/policy.json` requires KimiOS images to be signed by it
+   (`build_files/sign_policy.py`) and `registries.d/kimios.yaml` tells bootc and podman where signatures are. A system
+   checks them on every update after `sudo bootc switch --enforce-container-sigpolicy ghcr.io/kiplabat/kimios:latest`
+   once; the `os_status` tool says whether it does. Until the key is in the repository nothing is enforced.
 3. **Registry for drivers and skills:** where it lives and how submissions are reviewed (Phase 4).
 4. **Name of the edge firmware** and the first microcontroller family (ESP32 suggested).
 

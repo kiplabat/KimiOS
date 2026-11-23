@@ -53,5 +53,6 @@ systemctl enable kimi-telemetry.service   # 0.6.0: readings for KimiLM's Perform
 systemctl --global enable kimios-registry.path kimios-registry.service   # 0.12.0: the software registry
 systemctl --global enable kimios-toolbox.service   # 0.8.0: KimiLM's toolbox, made in the background at first login
 systemctl enable kimi-simbench.service kimi-envelope.service   # 0.9.0: simulated devices and the guard
+python3 /tmp/build_files/sign_policy.py   # 0.13.0: KimiOS images must be signed, once the public key is here
 systemctl enable kimi-snapshot.service   # 0.11.0: snapshots of the home folder before risky actions
 systemctl enable kimios-envelope-setup.service   # 0.11.0: their user and driver store (systems updated from 0.9.0)
