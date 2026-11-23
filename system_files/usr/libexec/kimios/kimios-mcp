@@ -29,7 +29,7 @@ import sys
 import time
 from pathlib import Path
 
-VERSION = "0.12.1"
+VERSION = "0.13.0"
 ROOT = Path(os.environ.get("KIMIOS_ROOT", "/"))        # tests point this at a fake /sys and /proc
 HARDWARE_JSON = Path(os.environ.get("KIMIOS_HARDWARE_JSON", "/var/lib/kimios/hardware.json"))
 TELEMETRY_JSON = Path(os.environ.get("KIMIOS_TELEMETRY_JSON", "/run/kimios/telemetry.json"))   # kimi-telemetry (0.6.0)
@@ -411,11 +411,19 @@ def tool_os_status():
     data = json.loads(out)
     deps = []
     for d in data.get("deployments", []):
-        deps.append({"booted": d.get("booted", False), "image": d.get("container-image-reference") or d.get("origin"),
+        ref = d.get("container-image-reference") or d.get("origin") or ""
+        deps.append({"booted": d.get("booted", False), "image": ref,
                      "version": d.get("version"), "timestamp": d.get("timestamp"), "staged": d.get("staged", False),
-                     "pinned": d.get("pinned", False)})
-    return {"deployments": deps,
-            "how_to_update": "Run `sudo bootc upgrade` and restart. `sudo bootc rollback` returns to the previous version."}
+                     "pinned": d.get("pinned", False),
+                     # 0.13.0: an image whose signature bootc checks on every update
+                     "signature_checked": ref.startswith("ostree-image-signed:")})
+    booted = next((d for d in deps if d["booted"]), {})
+    out = {"deployments": deps,
+           "how_to_update": "Run `sudo bootc upgrade` and restart. `sudo bootc rollback` returns to the previous version."}
+    if booted and not booted.get("signature_checked"):
+        out["signatures"] = ("Updates are not checked against KimiOS's signing key. To require it once: "
+                             "`sudo bootc switch --enforce-container-sigpolicy ghcr.io/kiplabat/kimios:latest`.")
+    return out
 
 
 # ------------------------------------------------------------------------------------------------- software

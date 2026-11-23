@@ -1,0 +1,5 @@
+# KimiOS 0.13.0: KimiOS images are signed with cosign (.github/workflows/build.yml); their signatures are stored
+# next to them in the registry. containers/image (bootc, podman) reads them from there.
+docker:
+  ghcr.io/kiplabat/kimios:
+    use-sigstore-attachments: true

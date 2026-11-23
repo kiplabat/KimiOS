@@ -91,15 +91,47 @@ jobs:
       contents: read
       packages: write
     steps:
+      - uses: actions/checkout@v5
       - name: One image for both architectures under each tag
         run: |
           IMAGE_LC="${IMAGE,,}"
           echo "${{ secrets.GITHUB_TOKEN }}" | podman login ghcr.io -u "${{ github.actor }}" --password-stdin
           SHORT_SHA="${GITHUB_SHA::7}"
+          : > /tmp/digests
           for tag in latest "$FEDORA_VERSION" "$FEDORA_VERSION-$SHORT_SHA"; do
             podman manifest create "$IMAGE_LC:$tag"
             for arch in amd64 arm64; do
               podman manifest add "$IMAGE_LC:$tag" "docker://$IMAGE_LC:$tag-$arch"
             done
-            podman manifest push --all "$IMAGE_LC:$tag" "docker://$IMAGE_LC:$tag"
+            podman manifest push --all --digestfile /tmp/digest "$IMAGE_LC:$tag" "docker://$IMAGE_LC:$tag"
+            echo "$IMAGE_LC@$(cat /tmp/digest)" >> /tmp/digests
           done
+          sort -u /tmp/digests | tee /tmp/to-sign
+
+      # 0.13.0: sign what was published (the image for both architectures and each architecture's own), so that
+      # `bootc upgrade` can refuse an image nobody signed. cosign 2.x: its signatures are the ones bootc and podman
+      # read (registries.d/kimios.yaml). No key yet (secret SIGNING_SECRET): published unsigned, with a warning.
+      - uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: v2.4.1
+      - name: Sign the published images
+        env:
+          COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}
+          COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+        run: |
+          if [ -z "$COSIGN_PRIVATE_KEY" ]; then
+            echo "::warning::No SIGNING_SECRET: the images are not signed (docs/SCOPE.md, image signing)"
+            exit 0
+          fi
+          cosign login ghcr.io -u "${{ github.actor }}" -p "${{ secrets.GITHUB_TOKEN }}"
+          while read -r ref; do
+            for i in 1 2 3; do
+              cosign sign --yes --recursive --key env://COSIGN_PRIVATE_KEY "$ref" && break
+              [ "$i" = 3 ] && exit 1
+              sleep 20
+            done
+          done < /tmp/to-sign
+          if [ -f system_files/etc/pki/containers/kimios.pub ]; then
+            while read -r ref; do cosign verify --key system_files/etc/pki/containers/kimios.pub "$ref" > /dev/null; done < /tmp/to-sign
+            echo "Signed and verified: $(wc -l < /tmp/to-sign) image(s)"
+          fi
