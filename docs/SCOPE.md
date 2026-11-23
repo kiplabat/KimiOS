@@ -210,6 +210,11 @@ image-builder's own entries have. Both entries now have it (the installed system
 entry, *Install KimiOS (basic graphics)*, adds `nomodeset` for older graphics. `kimios-registry` in a terminal now
 lists apps as well.
 
+**0.12.2:** Anaconda's bootc source always asks for a network, even when the image is on the stick, and the
+installer had no Wi-Fi (Fedora's bootc base leaves out the NetworkManager plugin and the firmware), so a laptop
+without an Ethernet cable could not finish. The installer now has Wi-Fi for common laptop cards. Without any
+network: an Android phone's USB tethering shows up as an Ethernet connection.
+
 **0.12.0: the registry knows more than apps (§2.4).** `kimios_registry.py` indexes, besides desktop entries:
 every program on PATH with what it is for (the manual index, `man -k`, and, where that index is not built yet on an
 image-based system, the summary of the package that installed it); system and user services with description
