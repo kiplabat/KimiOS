@@ -37,7 +37,12 @@ class Policy(unittest.TestCase):
         self.assertEqual(rule, [{"type": "sigstoreSigned", "keyPath": str(key),
                                  "signedIdentity": {"type": "matchRepository"}}])
         self.assertEqual(p["transports"]["docker"]["registry.access.redhat.com"], [{"type": "signedBy"}])
-        self.assertEqual(p["default"], FEDORA_POLICY["default"])           # other images as before
+        # 0.13.1: bootc enforces only when the default is not insecureAcceptAnything; other images as before
+        self.assertEqual(p["default"], [{"type": "reject"}])
+        for transport in ("docker", "docker-daemon", "containers-storage", "oci-archive", "docker-archive", "dir"):
+            self.assertEqual(p["transports"][transport][""], FEDORA_POLICY["default"], transport)
+        self.assertTrue(sign_policy.apply(self.policy, key))                 # twice: the same policy
+        self.assertEqual(json.loads(self.policy.read_text()), p)
 
     def test_the_image_reads_signatures_and_the_build_applies_the_policy(self):
         reg = (REPO / "system_files/etc/containers/registries.d/kimios.yaml").read_text()

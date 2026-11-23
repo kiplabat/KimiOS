@@ -411,6 +411,10 @@ Tests: `python3 -m unittest discover -s tests -v`
    (`build_files/sign_policy.py`) and `registries.d/kimios.yaml` tells bootc and podman where signatures are. A system
    checks them on every update after `sudo bootc switch --enforce-container-sigpolicy ghcr.io/kiplabat/kimios:latest`
    once; the `os_status` tool says whether it does. Until the key is in the repository nothing is enforced.
+   **0.13.1:** bootc refuses `--enforce-container-sigpolicy` while policy.json's top-level default is
+   `insecureAcceptAnything` (Fedora's). The default is now `reject`, and each transport (docker, docker-daemon,
+   containers-storage, the archives, dir, oci, sif, tarball) keeps accepting other images through its own `""`
+   scope, so podman, toolbox and local builds behave as before; only KimiOS's own scope requires the signature.
 3. **Registry for drivers and skills:** where it lives and how submissions are reviewed (Phase 4).
 4. **Name of the edge firmware** and the first microcontroller family (ESP32 suggested).
 
