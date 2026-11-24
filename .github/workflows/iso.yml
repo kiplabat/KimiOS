@@ -1,7 +1,7 @@
 name: Build KimiOS installer ISO
 
-# 0.12.0 (docs/SCOPE.md Phase 2): an interactive installer, x86_64. It asks for the disk; it never installs to the
-# first disk it finds. image-builder's generic-iso: the installer environment is iso/Containerfile.installer
+# 0.12.0 (docs/SCOPE.md Phase 2): an interactive installer, x86_64 and (installer polish) aarch64, each built on a
+# runner of its own architecture. It asks for the disk; it never installs to the first disk it finds. image-builder's generic-iso: the installer environment is iso/Containerfile.installer
 # (Anaconda on Fedora bootc), the payload is KimiOS from GHCR, embedded so installing needs no network.
 # (bootc-image-builder's anaconda-iso is legacy upstream and has no Fedora 45 repositories.)
 # Built on request (Actions → Build KimiOS installer ISO → Run workflow) and on pull requests that change it. The
@@ -25,7 +25,18 @@ env:
 
 jobs:
   iso:
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            platform: amd64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            platform: arm64
+            runner: ubuntu-24.04-arm
+    name: iso (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 150
     permissions:
       contents: read
@@ -48,7 +59,7 @@ jobs:
           echo "REF=$REF" >> "$GITHUB_ENV"
           for img in "$REF" "quay.io/fedora/fedora-bootc:$FEDORA_VERSION" "$BUILDER"; do
             for i in 1 2 3 4 5; do
-              sudo podman pull --arch amd64 "$img" && break
+              sudo podman pull --arch ${{ matrix.platform }} "$img" && break
               [ "$i" = 5 ] && exit 1
               echo "pull of $img failed (try $i of 5); again in $((i * 20)) s"; sleep $((i * 20))
             done
@@ -66,6 +77,20 @@ jobs:
           echo "$KS" | grep -q "^bootc --source-imgref containers-storage:$REF --target-imgref $REF$"
           ! echo "$KS" | grep -Eq '^(clearpart|autopart|zerombr|ignoredisk|part|text|cmdline)'
 
+      - name: The installer is named KimiOS and installs without a network
+        run: |
+          sudo podman run --rm localhost/kimios-installer bash -c '
+            set -e
+            grep -x "NAME=\"KimiOS\"" /etc/os-release /usr/lib/os-release
+            grep -x "RELEASE_TYPE=stable" /usr/lib/os-release
+            f=$(ls /usr/lib*/python3*/site-packages/pyanaconda/modules/payloads/source/bootc/bootc.py)
+            grep -q "KimiOS: not when the image is on the installation medium" "$f"
+            python3 -c "
+          import pyanaconda.core.product as p
+          v = p.get_product_values()
+          print(v)
+          assert (v.name, v.version, v.is_final_release) == (\"KimiOS\", \"45\", True), v"'
+
       - name: Build the ISO
         run: |
           sudo podman run --rm --privileged --security-opt label=type:unconfined_t \
@@ -78,7 +103,7 @@ jobs:
               generic-iso
           ISO=$(sudo find /mnt/iso-output -name '*.iso' | head -1)
           test -n "$ISO"
-          NAME="kimios-installer-x86_64-$(date +%Y%m%d)-${GITHUB_SHA::7}.iso"
+          NAME="kimios-installer-${{ matrix.arch }}-$(date +%Y%m%d)-${GITHUB_SHA::7}.iso"
           sudo mkdir -p /mnt/out && sudo chown "$(id -u)" /mnt/out
           sudo mv "$ISO" "/mnt/out/$NAME"
           sudo chown "$(id -u)" "/mnt/out/$NAME"
@@ -88,9 +113,15 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: kimios-installer-x86_64
+          name: kimios-installer-${{ matrix.arch }}
           path: |
             ${{ env.ISO }}
             ${{ env.ISO }}.sha256
           compression-level: 0
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
+
+      # after the upload: a failure here still leaves the ISO to look at
+      - name: Inside the ISO, what Anaconda will read
+        run: |
+          sudo apt-get install -y -qq xorriso squashfs-tools erofs-utils >/dev/null || true
+          sudo bash iso/check_iso.sh "$ISO"

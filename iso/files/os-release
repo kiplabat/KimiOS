@@ -1,0 +1,9 @@
+NAME="KimiOS"
+VERSION="45 (Installer)"
+ID=fedora
+VERSION_ID=45
+PRETTY_NAME="KimiOS 45"
+ANSI_COLOR="0;38;2;60;110;180"
+HOME_URL="https://github.com/kiplabat/KimiOS"
+BUG_REPORT_URL="https://github.com/kiplabat/KimiOS/issues"
+RELEASE_TYPE=stable

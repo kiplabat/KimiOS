@@ -21,7 +21,6 @@ RUN dnf5 install -qy \
       dracut-config-generic \
       dracut-network \
       net-tools \
-      grub2-efi-x64-cdboot \
       plymouth \
       default-fonts-core-sans \
       default-fonts-other-sans \
@@ -30,6 +29,13 @@ RUN dnf5 install -qy \
       squashfs-tools \
       jq \
  && dnf5 clean all
+
+# the boot loader the ISO starts with, for this architecture (x86_64 and, since the installer polish, aarch64)
+RUN case "$(uname -m)" in \
+      x86_64) dnf5 install -qy grub2-efi-x64-cdboot ;; \
+      aarch64) dnf5 install -qy grub2-efi-aa64-cdboot ;; \
+      *) echo "no installer for $(uname -m)" >&2; exit 1 ;; \
+    esac && dnf5 clean all
 
 # 0.12.2: Wi-Fi in the installer. Anaconda's bootc source always asks for a network (network_required is True even
 # for an image on the stick), and Fedora's bootc base has no Wi-Fi: the NetworkManager plugin, the supplicant and
@@ -54,6 +60,18 @@ RUN mkdir -p /boot/efi && cp -ra /usr/lib/efi/*/*/EFI /boot/efi
 
 # the ISO's label and boot menu (files/: no heredocs, the build runner's podman does not read them)
 COPY files/iso.yaml /usr/lib/image-builder/bootc/iso.yaml
+
+# KimiOS's name in the installer. Fedora 45's Anaconda names the product from /.buildstamp (Product, Version,
+# IsFinal) and shows "anaconda bluesky" without one (as the Dell did); newer Anaconda reads os-release (NAME,
+# VERSION_ID, RELEASE_TYPE) instead, so both say KimiOS. IsFinal / RELEASE_TYPE stable: no pre-release warning.
+# ID stays fedora: Anaconda's Fedora profile (partitioning defaults) is chosen by it.
+COPY files/buildstamp /.buildstamp
+COPY files/os-release /usr/lib/os-release
+RUN rm -f /etc/os-release && cp /usr/lib/os-release /etc/os-release
+
+# Installing needs no network when KimiOS is on the stick (Anaconda asks for one for every bootc source)
+COPY files/offline_bootc.py /tmp/offline_bootc.py
+RUN python3 /tmp/offline_bootc.py && rm /tmp/offline_bootc.py
 
 # what to install: KimiOS from the copy inside the ISO; updates from the registry. Nothing else: Anaconda asks
 RUN mkdir -p /usr/share/anaconda && \

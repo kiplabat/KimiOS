@@ -204,6 +204,19 @@ user. The build checks that before making the ISO. Built on request and on pull 
 is a workflow artifact. Not yet: an ARM64 ISO, signed images (open decision 2); the installer still shows Fedora's
 branding.
 
+**Installer polish (after 0.15.0).**
+- The installer is called KimiOS. Fedora 45's Anaconda names the product from `/.buildstamp` and showed
+  "anaconda bluesky" without one; newer Anaconda reads os-release instead. Both files now name KimiOS 45, final
+  (IsFinal, RELEASE_TYPE stable: no pre-release warning). ID stays fedora, which keeps Anaconda's Fedora
+  profile. The build asserts the name Anaconda itself computes.
+- Installing needs no network when KimiOS is on the stick. Anaconda's bootc source returned `network_required`
+  True for every source; `iso/files/offline_bootc.py` makes it false for containers-storage, oci and dir sources.
+  It edits the one block it expects and stops the build if Anaconda's code changed.
+- There is an aarch64 ISO next to the x86_64 one, each built on a runner of its own architecture.
+- The workflow checks the installer environment, then opens the finished ISO and checks what Anaconda will read
+  (`iso/check_iso.sh`).
+- Still to be seen on hardware: the offline install itself, and an aarch64 machine booting it.
+
 **0.12.1:** the first ISO stopped at start on a Dell ("Failed to allocate manager object", SELinux unable to label
 `/dev`): the installer's files carry no SELinux labels, and the boot entry lacked the `enforcing=0` that
 image-builder's own entries have. Both entries now have it (the installed system stays enforcing), and a second
