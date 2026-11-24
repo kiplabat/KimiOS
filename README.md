@@ -55,6 +55,13 @@ gives the signed-in user access to them (`70-kimios-devices.rules`) and ships ad
 Programs an agent needs and that are not installed go into KimiLM's own toolbox (`kimilm-tools`), with no password;
 the toolbox is made in the background after the first login (`kimios-toolbox.service`).
 
+Control panels and games (0.16.0, with KimiLM 2.34.0): describe a panel for a device (sliders, switches, live
+charts; for a device the guard runs, the targets you set become a controller the guard checks and holds) or a game
+(2D or 3D, with the computer as a player), and a model builds it as an app in KimiLM's Apps. Every rebuild is a new
+version and the old ones stay. An app put in the computer's apps menu is a desktop entry that KimiOS's software
+registry lists, so agents can open it with `launch_app`; game controllers' full reports are given to the
+signed-in session (`70-kimios-devices.rules`).
+
 Making devices do what you ask (0.9.0): `kimi-simbench` runs simulated devices (a two-compartment fridge, a heated
 room, an air sensor) on serial ports, and `kimi-envelope` is the guard between them and agents. An agent reads a
 device's datasheet, writes its driver as a manifest and tests it, records step experiments, fits a model, checks

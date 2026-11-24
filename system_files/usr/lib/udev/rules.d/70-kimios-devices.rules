@@ -22,3 +22,9 @@ SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="1d6b", ATTR{idPro
 
 # External displays' brightness and input (DDC/CI over I2C, used by ddcutil)
 SUBSYSTEM=="i2c-dev", KERNEL=="i2c-[0-9]*", TAG+="uaccess"
+
+# 0.16.0: game controllers, for KimiLM's games. Buttons and sticks already reach the Gamepad API through evdev (which
+# systemd gives the active session); this adds their full reports over hidraw (lights, rumble, motion, touchpads),
+# for controller makers only (Sony, Nintendo, 8BitDo, Valve), never makers of keyboards: USB, then Bluetooth.
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="054c|057e|2dc8|28de", TAG+="uaccess"
+KERNEL=="hidraw*", KERNELS=="*054C:*|*057E:*|*2DC8:*|*28DE:*", TAG+="uaccess"

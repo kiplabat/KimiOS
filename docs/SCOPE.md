@@ -379,6 +379,24 @@ outside KimiOS:
   controller was measured over 6 h of device time on the simulator: top 3.98 °C mean (max 0.7 °C off 4), bottom
   −18.02 °C (max 1.2 off), 2.8 compressor starts an hour, 53 % duty.
 
+- **0.16.0 (with KimiLM 2.34.0): control panels and games as apps.** A person describes what they want and a model
+  builds it as a small app that KimiLM keeps, versions and runs in a sandboxed frame: a **control panel** for one
+  device (sliders, switches, choices and live charts; for a device the guard runs, new set points become a
+  controller spec that the guard checks and then holds, so a panel is the friendly face of the same loop agents
+  use), or a **game** (2D, or 3D with three.js, with the computer as a player). A panel may carry code for the
+  device itself (`device/controller.json` → the guard; MicroPython; a `.uf2`; files for a phone), installed from
+  the panel. Every rebuild (a better model, a change) is a new version and the old ones stay. KimiOS's part:
+  - an app put in the computer's apps menu is a desktop entry (`kimilm-app-<id>.desktop`, `X-KimiLM-App`,
+    `Exec=kimilm --open-app=<id>`) in `~/.local/share/applications`, so the software registry lists it as an app
+    with `kimilm_app` (game or control panel) and `launch_app` opens it in its own KimiLM window (in the KimiOS
+    session, over KimiLM: closing it returns to KimiLM);
+  - game controllers from controller makers (Sony, Nintendo, 8BitDo, Valve; never a keyboard maker's devices) are
+    given to the signed-in session over hidraw too (`70-kimios-devices.rules`), for their lights, rumble and
+    motion; buttons and sticks of every controller already reach the Gamepad API through evdev.
+  Apps cannot reach the internet or the device directly: everything goes through KimiLM, which asks once per app
+  for changes and every time for anything that may move, heat or switch a real device (principle 5).
+  Next: sharing panels and games through `kimios-registry` (an `apps/` kind, reviewed like drivers).
+
 ### Phase 5 — Other architectures and form factors
 
 - ARM64 images (Raspberry Pi and similar boards); RISC-V when Fedora bootc supports it.
