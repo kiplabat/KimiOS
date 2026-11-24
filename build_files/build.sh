@@ -2,8 +2,10 @@
 # Runs inside the image build (see Containerfile).
 set -euo pipefail
 
+PROFILE="${PROFILE:-desktop}"   # 0.15.0: desktop or headless (Containerfile)
+case "${PROFILE}" in desktop|headless) ;; *) echo "PROFILE is desktop or headless, not ${PROFILE}" >&2; exit 1 ;; esac
+
 PACKAGES=(
-  cage            # kiosk Wayland compositor for the KimiOS session
   python3         # kimi-hwprobe (standard library only)
   openssl3-libs   # libssl.so.3 for KimiLM's llama.cpp builds (Fedora 45's own OpenSSL is 4.0, libssl.so.4)
   usbutils pciutils i2c-tools libgpiod-utils   # device inspection for agents
@@ -13,9 +15,23 @@ PACKAGES=(
   ddcutil                           # an external display's brightness and input (DDC/CI)
   btrfs-progs                       # 0.11.0: snapshots of the home folder before risky actions (kimi-snapshot)
 )
+if [[ "${PROFILE}" == desktop ]]; then
+  PACKAGES+=(cage)                  # kiosk Wayland compositor for the KimiOS session
+else
+  # 0.15.0 headless: reached over the network (SSH, found by name on the local network), Wi-Fi, Node.js for the
+  # MCP servers KimiLM starts (the desktop uses KimiLM's own Electron for that), toolbox for KimiLM's programs,
+  # and the GPU drivers llama.cpp's Vulkan build uses. fedora-bootc already has NetworkManager and podman.
+  PACKAGES+=(openssh-server avahi nss-mdns NetworkManager-wifi wpa_supplicant nodejs toolbox
+             vulkan-loader mesa-vulkan-drivers)
+fi
 
 if command -v dnf5 >/dev/null 2>&1; then
   dnf5 -y install --setopt=install_weak_deps=False "${PACKAGES[@]}"
+  if [[ "${PROFILE}" == headless ]]; then
+    # Wi-Fi firmware for common laptop and board cards (as the installer, 0.12.2); missing names are skipped
+    dnf5 -y install --setopt=install_weak_deps=False --skip-unavailable linux-firmware iwlwifi-mvm-firmware \
+      iwlwifi-dvm-firmware atheros-firmware brcmfmac-firmware realtek-firmware mt7xxx-firmware
+  fi
   dnf5 clean all
 else
   rpm-ostree install --idempotent "${PACKAGES[@]}"
@@ -24,7 +40,7 @@ fi
 chmod 0755 /usr/libexec/kimios/kimios-session /usr/libexec/kimios/kimi-hwprobe /usr/libexec/kimios/kimios-mcp \
   /usr/libexec/kimios/kimi-telemetry /usr/libexec/kimios/kimi-simbench /usr/libexec/kimios/kimi-envelope \
   /usr/libexec/kimios/kimios-device /usr/libexec/kimios/kimios-envelope-setup /usr/libexec/kimios/kimi-snapshot \
-  /usr/libexec/kimios/kimios-snapshot /usr/libexec/kimios/kimios-registry
+  /usr/libexec/kimios/kimios-snapshot /usr/libexec/kimios/kimios-registry /usr/libexec/kimios/kimios-headless
 ln -sf /usr/libexec/kimios/kimios-registry /usr/bin/kimios-registry   # 0.12.0: what installed software can do
 ln -sf /usr/libexec/kimios/kimios-snapshot /usr/bin/kimios-snapshot   # 0.11.0: snapshots and one-step undo
 ln -sf /usr/libexec/kimios/kimios-device /usr/bin/kimios-device   # 0.10.0: register real devices (sudo)
@@ -43,9 +59,19 @@ if [[ -n "${KIMILM_URL:-}" ]]; then
     ln -sf /usr/lib/kimilm/kimilm /usr/bin/kimilm
     # Electron's sandbox helper, for systems where user namespaces are switched off
     chmod 4755 /usr/lib/kimilm/chrome-sandbox
-    install -Dm0644 /usr/lib/kimilm/resources/ui/icon.png /usr/share/icons/hicolor/512x512/apps/kimilm.png
-    install -Dm0644 /tmp/build_files/kimilm.desktop /usr/share/applications/kimilm.desktop
+    if [[ "${PROFILE}" == desktop ]]; then
+      install -Dm0644 /usr/lib/kimilm/resources/ui/icon.png /usr/share/icons/hicolor/512x512/apps/kimilm.png
+      install -Dm0644 /tmp/build_files/kimilm.desktop /usr/share/applications/kimilm.desktop
+    fi
   fi
+fi
+
+if [[ "${PROFILE}" == headless ]]; then
+  # 0.15.0: no desktop session to choose; KimiLM's engine runs as the person's service (kimios-headless setup)
+  rm -f /usr/share/wayland-sessions/kimios.desktop
+  ln -sf /usr/libexec/kimios/kimios-headless /usr/bin/kimios-headless
+  systemctl enable sshd.service avahi-daemon.service
+  systemctl set-default multi-user.target
 fi
 
 systemctl enable kimi-hwprobe.service

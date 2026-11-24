@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 REPO = "ghcr.io/kiplabat/kimios"
+REPOS = (REPO, REPO + "-headless")      # 0.15.0: both profiles, signed by the same key
 ACCEPT = [{"type": "insecureAcceptAnything"}]
 # every transport podman, buildah, skopeo, toolbox and bootc use; each keeps accepting what it did before
 TRANSPORTS = ("docker", "docker-daemon", "docker-archive", "oci", "oci-archive", "dir", "containers-storage",
@@ -34,10 +35,11 @@ def apply(policy_path, key_path):
         for t in TRANSPORTS:
             transports.setdefault(t, {}).setdefault("", was)
         policy["default"] = [{"type": "reject"}]
-    transports.setdefault("docker", {})[REPO] = [
-        {"type": "sigstoreSigned", "keyPath": str(key), "signedIdentity": {"type": "matchRepository"}}]
+    for repo in REPOS:
+        transports.setdefault("docker", {})[repo] = [
+            {"type": "sigstoreSigned", "keyPath": str(key), "signedIdentity": {"type": "matchRepository"}}]
     policy_file.write_text(json.dumps(policy, indent=2) + "\n")
-    print(f"sign_policy: {REPO} must be signed by {key}")
+    print(f"sign_policy: {', '.join(REPOS)} must be signed by {key}")
     return True
 
 

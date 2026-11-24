@@ -2,6 +2,8 @@ name: Build KimiOS image
 
 # 0.5.0: one image per architecture, each built on a runner of its own kind (x86_64 and ARM64), published together
 # under the same tags as one multi-architecture image. A computer pulls the one that fits it.
+# 0.15.0: two profiles, each its own image: kimios (desktop, on Silverblue) and kimios-headless (no desktop, on
+# fedora-bootc).
 
 on:
   push:
@@ -26,13 +28,15 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m unittest discover -s tests -v
-      - run: bash -n build_files/build.sh system_files/usr/libexec/kimios/kimios-session
+      - run: for f in build_files/build.sh system_files/usr/libexec/kimios/kimios-session system_files/usr/libexec/kimios/kimios-headless; do bash -n "$f"; done
 
   image:
     needs: test
     strategy:
       fail-fast: false
       matrix:
+        arch: [amd64, arm64]
+        profile: [desktop, headless]
         include:
           - arch: amd64
             kimilm: x64
@@ -40,6 +44,13 @@ jobs:
           - arch: arm64
             kimilm: arm64
             runner: ubuntu-24.04-arm
+          - profile: desktop
+            base: quay.io/fedora/fedora-silverblue
+            suffix: ""
+          - profile: headless
+            base: quay.io/fedora/fedora-bootc
+            suffix: "-headless"
+    name: image (${{ matrix.profile }}, ${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -57,7 +68,7 @@ jobs:
       - name: Pull the Fedora base (with retries)
         run: |
           for i in 1 2 3 4 5; do
-            podman pull "quay.io/fedora/fedora-silverblue:$FEDORA_VERSION" && exit 0
+            podman pull "${{ matrix.base }}:$FEDORA_VERSION" && exit 0
             echo "pull failed (try $i of 5); trying again in $((i * 20)) s"
             sleep $((i * 20))
           done
@@ -65,13 +76,36 @@ jobs:
 
       - name: Build
         run: |
-          IMAGE_LC="${IMAGE,,}"
+          IMAGE_LC="${IMAGE,,}${{ matrix.suffix }}"
           echo "IMAGE_LC=$IMAGE_LC" >> "$GITHUB_ENV"
           podman build \
             --build-arg FEDORA_VERSION="$FEDORA_VERSION" \
+            --build-arg BASE_IMAGE="${{ matrix.base }}" \
+            --build-arg PROFILE="${{ matrix.profile }}" \
             --build-arg KIMILM_URL="$KIMILM_BASE/KimiLM-linux-${{ matrix.kimilm }}.tar.gz" \
             -t "$IMAGE_LC:build" .
           podman run --rm "$IMAGE_LC:build" sh -c 'uname -m; ls -l /usr/bin/kimilm 2>/dev/null || echo "no KimiLM in this image"; /usr/libexec/kimios/kimi-hwprobe | head -c 300; echo'
+
+      # 0.15.0: the headless image is only useful if KimiLM's engine starts on it without a desktop
+      - name: Headless - KimiLM's engine answers
+        if: matrix.profile == 'headless'
+        run: |
+          podman run --rm "$IMAGE_LC:build" bash -c '
+            set -e
+            test -x /usr/bin/kimios-headless
+            test -e /etc/systemd/system/multi-user.target.wants/sshd.service
+            test -e /etc/systemd/system/multi-user.target.wants/avahi-daemon.service
+            test ! -e /usr/share/wayland-sessions/kimios.desktop
+            if [ ! -x /usr/lib/kimilm/resources/python/bin/python3 ]; then echo "no KimiLM in this image"; exit 0; fi
+            cd /usr/lib/kimilm/resources/engine
+            DVA_TOKEN=ci DVA_SECRETS=file PYTHONNOUSERSITE=1 DVA_UI_DIR=/usr/lib/kimilm/resources/ui \
+              /usr/lib/kimilm/resources/python/bin/python3 -m dva serve --port 8765 --data-dir /tmp/kimilm \
+              --resources /usr/lib/kimilm/resources > /tmp/engine.out 2>&1 &
+            for i in $(seq 1 120); do grep -q DVA_READY /tmp/engine.out && break; sleep 1; done
+            grep -q DVA_READY /tmp/engine.out || { cat /tmp/engine.out; exit 1; }
+            curl -fsS localhost:8765/api/health; echo
+            curl -fsS localhost:8765/ | grep -qi "<html" && echo "the interface is served"
+            /usr/lib/kimilm/resources/llama/cpu/llama-server --version 2>&1 | tail -1'
 
       - name: Push this architecture
         if: github.event_name != 'pull_request'
@@ -99,12 +133,14 @@ jobs:
           SHORT_SHA="${GITHUB_SHA::7}"
           : > /tmp/digests
           for tag in latest "$FEDORA_VERSION" "$FEDORA_VERSION-$SHORT_SHA"; do
-            podman manifest create "$IMAGE_LC:$tag"
-            for arch in amd64 arm64; do
-              podman manifest add "$IMAGE_LC:$tag" "docker://$IMAGE_LC:$tag-$arch"
+            for image in "$IMAGE_LC" "$IMAGE_LC-headless"; do      # 0.15.0: both profiles
+              podman manifest create "$image:$tag"
+              for arch in amd64 arm64; do
+                podman manifest add "$image:$tag" "docker://$image:$tag-$arch"
+              done
+              podman manifest push --all --digestfile /tmp/digest "$image:$tag" "docker://$image:$tag"
+              echo "$image@$(cat /tmp/digest)" >> /tmp/digests
             done
-            podman manifest push --all --digestfile /tmp/digest "$IMAGE_LC:$tag" "docker://$IMAGE_LC:$tag"
-            echo "$IMAGE_LC@$(cat /tmp/digest)" >> /tmp/digests
           done
           sort -u /tmp/digests | tee /tmp/to-sign
 
