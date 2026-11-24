@@ -90,3 +90,8 @@ podman build -t kimios .                    # build the image
 ```
 
 Every push to `main` builds the image and pushes it to `ghcr.io/kiplabat/kimios`.
+
+## Licence
+
+Apache-2.0 ([LICENSE](LICENSE)), the same as the bootc tooling KimiOS builds on and as
+[kimios-registry](https://github.com/kiplabat/kimios-registry). Contributions are accepted under it.

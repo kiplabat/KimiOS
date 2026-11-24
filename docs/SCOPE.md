@@ -425,7 +425,8 @@ Tests: `python3 -m unittest discover -s tests -v`
 
 ## 6. Open decisions
 
-1. **Licence** (KimiOS repository): Apache-2.0 is suggested (matches bootc tooling; patent grant).
+1. **Licence:** decided: Apache-2.0 (`LICENSE`), as the bootc tooling and kimios-registry; it includes a
+   patent grant.
 2. **Image signing:** decided and built (0.13.0): cosign, a key pair. The private key is the repository secret
    `SIGNING_SECRET` (its password `COSIGN_PASSWORD`); the publish job signs every published image (the image for
    both architectures and each one's own) and verifies it. The public key is `system_files/etc/pki/containers/kimios.pub`;
