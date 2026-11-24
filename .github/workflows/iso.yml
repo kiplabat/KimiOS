@@ -124,4 +124,4 @@ jobs:
       - name: Inside the ISO, what Anaconda will read
         run: |
           sudo apt-get install -y -qq xorriso squashfs-tools erofs-utils >/dev/null || true
-          bash iso/check_iso.sh "$ISO"
+          sudo bash iso/check_iso.sh "$ISO"

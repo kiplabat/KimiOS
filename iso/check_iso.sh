@@ -8,10 +8,14 @@ fail() { echo "::error::$*"; echo "The ISO holds:"; xorriso -indev "$ISO" -find 
 
 # the installer's root file system: wherever image-builder put it, squashfs, erofs or ext4, and the image inside it
 # when there is one (LiveOS/rootfs.img: what dracut mounts at start)
-open_fs() {   # image, target directory -> prints the directory, or "ext4:<image>"
-  if unsquashfs -d "$2" "$1" >/dev/null 2>&1; then echo "$2"
-  elif fsck.erofs --extract="$2" "$1" >/dev/null 2>&1; then echo "$2"
-  elif debugfs -R "ls /" "$1" >/dev/null 2>&1; then echo "ext4:$1"
+WANT=(.buildstamp usr/lib/os-release LiveOS/rootfs.img
+      "usr/lib*/python3*/site-packages/pyanaconda/modules/payloads/source/bootc/bootc.py")
+open_fs() {   # image, target directory -> prints the directory, or "ext4:<image>"; only the files checked here
+  if unsquashfs -s "$1" >/dev/null 2>&1; then
+    unsquashfs -q -n -d "$2" "$1" "${WANT[@]}" >/dev/null 2>&1; [ -d "$2" ] && echo "$2"
+  elif dump.erofs "$1" >/dev/null 2>&1; then
+    fsck.erofs --extract="$2" "$1" >/dev/null 2>&1; [ -d "$2" ] && echo "$2"
+  elif dumpe2fs -h "$1" >/dev/null 2>&1; then echo "ext4:$1"
   fi
 }
 root=""
