@@ -29,7 +29,7 @@ import sys
 import time
 from pathlib import Path
 
-VERSION = "0.16.0"
+VERSION = "0.17.0"
 ROOT = Path(os.environ.get("KIMIOS_ROOT", "/"))        # tests point this at a fake /sys and /proc
 HARDWARE_JSON = Path(os.environ.get("KIMIOS_HARDWARE_JSON", "/var/lib/kimios/hardware.json"))
 TELEMETRY_JSON = Path(os.environ.get("KIMIOS_TELEMETRY_JSON", "/run/kimios/telemetry.json"))   # kimi-telemetry (0.6.0)

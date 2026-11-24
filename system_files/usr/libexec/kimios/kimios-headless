@@ -19,12 +19,13 @@ PY="${KIMIOS_KIMILM_PYTHON:-/usr/lib/kimilm/resources/python/bin/python3}"   # (
 
 die() { echo "kimios-headless: $*" >&2; exit 1; }
 value() { sed -n "s/^$1=//p" "$ENVF" 2>/dev/null | tail -1; }
+token() { local t; t="$(value KIMILM_TOKEN)"; echo "${t:-$(value DVA_TOKEN)}"; }   # DVA_TOKEN: written before 0.17.0
 new_token() { head -c 60 /dev/urandom | base64 -w0 | tr -dc 'A-Za-z0-9' | head -c 40; }   # 80 characters, 40 kept
 
 write_env() {   # token, port
   mkdir -p "$CONF"
   chmod 700 "$CONF"
-  (umask 077; printf 'DVA_TOKEN=%s\nKIMILM_PORT=%s\n' "$1" "$2" > "$ENVF.tmp")
+  (umask 077; printf 'KIMILM_TOKEN=%s\nKIMILM_PORT=%s\n' "$1" "$2" > "$ENVF.tmp")
   mv "$ENVF.tmp" "$ENVF"
 }
 
@@ -40,7 +41,7 @@ wait_ready() {
 
 url() {
   local port token host
-  port="$(value KIMILM_PORT)"; token="$(value DVA_TOKEN)"
+  port="$(value KIMILM_PORT)"; token="$(token)"
   [[ -n "$token" ]] || die "not set up yet: run kimios-headless setup"
   host="$(hostname)"
   echo "On the computer you use, keep this running (it asks for $USER's password on $host):"
@@ -55,7 +56,7 @@ case "${1:-}" in
   setup)
     [[ -x "$PY" ]] || die "KimiLM is not in this image (no $PY); update with sudo bootc upgrade"
     [[ "$(id -u)" != 0 ]] || die "run it as the person who will use KimiLM, not as root"
-    if [[ -z "$(value DVA_TOKEN)" ]]; then
+    if [[ -z "$(token)" ]]; then
       write_env "$(new_token)" "${KIMILM_PORT:-8765}"
       echo "Made a private token in $ENVF"
     fi
@@ -85,7 +86,7 @@ case "${1:-}" in
     fi
     ;;
   rotate)
-    [[ -n "$(value DVA_TOKEN)" ]] || die "not set up yet: run kimios-headless setup"
+    [[ -n "$(token)" ]] || die "not set up yet: run kimios-headless setup"
     write_env "$(new_token)" "$(value KIMILM_PORT)"
     systemctl --user restart "$UNIT"
     wait_ready "$(value KIMILM_PORT)" || die "it did not come back: kimios-headless logs"

@@ -9,11 +9,11 @@ ConditionPathExists=%h/.config/kimilm-headless/engine.env
 [Service]
 Slice=kimilm.slice
 EnvironmentFile=%h/.config/kimilm-headless/engine.env
-Environment=DVA_UI_DIR=/usr/lib/kimilm/resources/ui DVA_NODE=/usr/bin/node DVA_SECRETS=file KIMIOS_HEADLESS=1
-Environment=DVA_PLAYWRIGHT_MCP=/usr/lib/kimilm/resources/app.asar.unpacked/node_modules/@playwright/mcp/cli.js
+Environment=KIMILM_UI_DIR=/usr/lib/kimilm/resources/ui KIMILM_NODE=/usr/bin/node KIMILM_SECRETS=file KIMIOS_HEADLESS=1
+Environment=KIMILM_PLAYWRIGHT_MCP=/usr/lib/kimilm/resources/app.asar.unpacked/node_modules/@playwright/mcp/cli.js
 Environment=PYTHONUTF8=1 PYTHONIOENCODING=utf-8 PYTHONNOUSERSITE=1 NO_PROXY=127.0.0.1,localhost
 WorkingDirectory=/usr/lib/kimilm/resources/engine
-ExecStart=/usr/lib/kimilm/resources/python/bin/python3 -m dva serve --port ${KIMILM_PORT} --data-dir %h/.config/KimiLM --resources /usr/lib/kimilm/resources
+ExecStart=/usr/lib/kimilm/resources/python/bin/python3 -m kimilm serve --port ${KIMILM_PORT} --data-dir %h/.config/KimiLM --resources /usr/lib/kimilm/resources
 Restart=on-failure
 RestartSec=5
 

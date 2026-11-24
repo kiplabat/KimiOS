@@ -423,6 +423,9 @@ outside KimiOS:
     signed.
   - Not yet: voice; an installer ISO for headless (today: switch an installed KimiOS, or `bootc install to-disk`
     from any Linux with podman); the browser tools' Chromium libraries on fedora-bootc (untested).
+  - 0.17.0 (with KimiLM 2.37.0): KimiLM's engine is the package `kimilm` and its settings are `KIMILM_*` (they
+    were `dva` and `DVA_*`). The service starts `python -m kimilm`, and `kimios-headless` writes `KIMILM_TOKEN`; a
+    `DVA_TOKEN` written by an earlier KimiOS is still read, and `rotate` replaces it.
 
 ---
 
