@@ -98,11 +98,11 @@ jobs:
             test ! -e /usr/share/wayland-sessions/kimios.desktop
             if [ ! -x /usr/lib/kimilm/resources/python/bin/python3 ]; then echo "no KimiLM in this image"; exit 0; fi
             cd /usr/lib/kimilm/resources/engine
-            DVA_TOKEN=ci DVA_SECRETS=file PYTHONNOUSERSITE=1 DVA_UI_DIR=/usr/lib/kimilm/resources/ui \
-              /usr/lib/kimilm/resources/python/bin/python3 -m dva serve --port 8765 --data-dir /tmp/kimilm \
+            KIMILM_TOKEN=ci KIMILM_SECRETS=file PYTHONNOUSERSITE=1 KIMILM_UI_DIR=/usr/lib/kimilm/resources/ui \
+              /usr/lib/kimilm/resources/python/bin/python3 -m kimilm serve --port 8765 --data-dir /tmp/kimilm \
               --resources /usr/lib/kimilm/resources > /tmp/engine.out 2>&1 &
-            for i in $(seq 1 120); do grep -q DVA_READY /tmp/engine.out && break; sleep 1; done
-            grep -q DVA_READY /tmp/engine.out || { cat /tmp/engine.out; exit 1; }
+            for i in $(seq 1 120); do grep -q KIMILM_READY /tmp/engine.out && break; sleep 1; done
+            grep -q KIMILM_READY /tmp/engine.out || { cat /tmp/engine.out; exit 1; }
             curl -fsS localhost:8765/api/health; echo
             curl -fsS localhost:8765/ | grep -qi "<html" && echo "the interface is served"
             /usr/lib/kimilm/resources/llama/cpu/llama-server --version 2>&1 | tail -1'

@@ -65,9 +65,10 @@ class Image(unittest.TestCase):
         unit = (REPO / "system_files/usr/lib/systemd/user/kimilm-headless.service").read_text()
         self.assertIn("EnvironmentFile=%h/.config/kimilm-headless/engine.env", unit)
         self.assertIn("Slice=kimilm.slice", unit)
-        self.assertIn("-m dva serve --port ${KIMILM_PORT} --data-dir %h/.config/KimiLM", unit)
+        self.assertIn("-m kimilm serve --port ${KIMILM_PORT} --data-dir %h/.config/KimiLM", unit)
         self.assertNotIn("0.0.0.0", unit)                         # the engine binds 127.0.0.1 itself
-        self.assertNotIn("DVA_TOKEN=", unit)                      # the token is only in the person's file
+        self.assertNotIn("KIMILM_TOKEN=", unit)                   # the token is only in the person's file
+        self.assertNotIn("DVA_", unit)                            # KimiLM 2.37.0 names: KIMILM_*
 
 
 class Command(unittest.TestCase):
@@ -96,22 +97,34 @@ class Command(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(envf.stat().st_mode), 0o600)
         self.assertEqual(stat.S_IMODE(envf.parent.stat().st_mode), 0o700)
         values = dict(line.split("=", 1) for line in envf.read_text().split())
-        self.assertRegex(values["DVA_TOKEN"], r"^[A-Za-z0-9]{40}$")
+        self.assertRegex(values["KIMILM_TOKEN"], r"^[A-Za-z0-9]{40}$")
         self.assertEqual(values["KIMILM_PORT"], "8765")
         log = self.log.read_text()
         self.assertIn("loginctl enable-linger labatt", log)
         self.assertIn("systemctl --user enable --now kimilm-headless.service", log)
         self.assertIn("ssh -N -L 8765:localhost:8765 labatt@kimibox.local", out.stdout)
-        self.assertIn(f"http://localhost:8765/?token={values['DVA_TOKEN']}", out.stdout)
+        self.assertIn(f"http://localhost:8765/?token={values['KIMILM_TOKEN']}", out.stdout)
         self.assertIn("192.168.1.5", out.stdout)
         self.assertEqual(self.run_cli("setup").returncode, 0)    # again: the same token
-        self.assertEqual(dict(line.split("=", 1) for line in envf.read_text().split())["DVA_TOKEN"],
-                         values["DVA_TOKEN"])
+        self.assertEqual(dict(line.split("=", 1) for line in envf.read_text().split())["KIMILM_TOKEN"],
+                         values["KIMILM_TOKEN"])
         out = self.run_cli("rotate")
         self.assertEqual(out.returncode, 0, out.stderr)
-        new = dict(line.split("=", 1) for line in envf.read_text().split())["DVA_TOKEN"]
-        self.assertNotEqual(new, values["DVA_TOKEN"])
+        new = dict(line.split("=", 1) for line in envf.read_text().split())["KIMILM_TOKEN"]
+        self.assertNotEqual(new, values["KIMILM_TOKEN"])
         self.assertIn(new, out.stdout)
+
+    def test_a_token_written_by_an_earlier_kimios_still_works(self):
+        envf = self.home / ".config/kimilm-headless/engine.env"
+        envf.parent.mkdir(parents=True)
+        envf.write_text("DVA_TOKEN=oldtoken123\nKIMILM_PORT=8765\n")
+        out = self.run_cli("setup")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("http://localhost:8765/?token=oldtoken123", out.stdout)   # kept, not replaced
+        self.assertEqual(self.run_cli("rotate").returncode, 0)
+        values = dict(line.split("=", 1) for line in envf.read_text().split())
+        self.assertNotIn("DVA_TOKEN", values)
+        self.assertRegex(values["KIMILM_TOKEN"], r"^[A-Za-z0-9]{40}$")
 
     def test_it_refuses_without_kimilm_or_as_root(self):
         self.env["KIMIOS_KIMILM_PYTHON"] = "/nonexistent/python3"
