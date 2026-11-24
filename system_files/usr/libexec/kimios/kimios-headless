@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+# KimiOS 0.15.0 headless: KimiLM without a desktop, reached from another computer over SSH.
+#
+#   kimios-headless setup     make a private token, keep KimiLM running without anyone logged in, start it
+#   kimios-headless url       how to open it from another computer (SSH tunnel, then a browser)
+#   kimios-headless status    is it running, and on which port
+#   kimios-headless rotate    a new token (open sessions must use the new link)
+#   kimios-headless stop      stop it (setup starts it again)
+#   kimios-headless logs      what it last wrote
+#
+# The engine listens on 127.0.0.1 only. Nothing on the network can reach it except through SSH, which needs this
+# computer's account; the token is a second lock, for the browser.
+set -euo pipefail
+
+CONF="${XDG_CONFIG_HOME:-$HOME/.config}/kimilm-headless"
+ENVF="$CONF/engine.env"
+UNIT=kimilm-headless.service
+PY="${KIMIOS_KIMILM_PYTHON:-/usr/lib/kimilm/resources/python/bin/python3}"   # (tests point it elsewhere)
+
+die() { echo "kimios-headless: $*" >&2; exit 1; }
+value() { sed -n "s/^$1=//p" "$ENVF" 2>/dev/null | tail -1; }
+new_token() { head -c 60 /dev/urandom | base64 -w0 | tr -dc 'A-Za-z0-9' | head -c 40; }   # 80 characters, 40 kept
+
+write_env() {   # token, port
+  mkdir -p "$CONF"
+  chmod 700 "$CONF"
+  (umask 077; printf 'DVA_TOKEN=%s\nKIMILM_PORT=%s\n' "$1" "$2" > "$ENVF.tmp")
+  mv "$ENVF.tmp" "$ENVF"
+}
+
+wait_ready() {
+  local port="$1"
+  for _ in $(seq 1 90); do
+    curl -fsS -m 2 "http://127.0.0.1:$port/api/health" >/dev/null 2>&1 && return 0
+    systemctl --user -q is-failed "$UNIT" && return 1
+    sleep 1
+  done
+  return 1
+}
+
+url() {
+  local port token host
+  port="$(value KIMILM_PORT)"; token="$(value DVA_TOKEN)"
+  [[ -n "$token" ]] || die "not set up yet: run kimios-headless setup"
+  host="$(hostname)"
+  echo "On the computer you use, keep this running (it asks for $USER's password on $host):"
+  echo "    ssh -N -L $port:localhost:$port $USER@$host.local"
+  echo "  (or $USER@<this computer's address>: $(hostname -I 2>/dev/null | awk '{print $1}'))"
+  echo "Then open in a browser there:"
+  echo "    http://localhost:$port/?token=$token"
+  echo "Keep the link private: with the tunnel open, it is the key to KimiLM."
+}
+
+case "${1:-}" in
+  setup)
+    [[ -x "$PY" ]] || die "KimiLM is not in this image (no $PY); update with sudo bootc upgrade"
+    [[ "$(id -u)" != 0 ]] || die "run it as the person who will use KimiLM, not as root"
+    if [[ -z "$(value DVA_TOKEN)" ]]; then
+      write_env "$(new_token)" "${KIMILM_PORT:-8765}"
+      echo "Made a private token in $ENVF"
+    fi
+    if [[ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null)" != yes ]]; then
+      loginctl enable-linger "$USER" 2>/dev/null || {
+        echo "To keep KimiLM running when nobody is logged in, run once: sudo loginctl enable-linger $USER"; }
+    fi
+    systemctl --user daemon-reload
+    systemctl --user enable --now "$UNIT"
+    if wait_ready "$(value KIMILM_PORT)"; then
+      echo "KimiLM is running."
+      url
+    else
+      echo "KimiLM did not answer within 90 seconds. What it wrote:" >&2
+      journalctl --user -u "$UNIT" -n 30 --no-pager >&2 || true
+      exit 1
+    fi
+    ;;
+  url) url ;;
+  status)
+    port="$(value KIMILM_PORT)"
+    if curl -fsS -m 2 "http://127.0.0.1:${port:-8765}/api/health" 2>/dev/null; then
+      echo; echo "running on 127.0.0.1:$port (systemctl --user status $UNIT)"
+    else
+      echo "not running ($(systemctl --user is-active "$UNIT" 2>/dev/null || true)); start it with kimios-headless setup"
+      exit 3
+    fi
+    ;;
+  rotate)
+    [[ -n "$(value DVA_TOKEN)" ]] || die "not set up yet: run kimios-headless setup"
+    write_env "$(new_token)" "$(value KIMILM_PORT)"
+    systemctl --user restart "$UNIT"
+    wait_ready "$(value KIMILM_PORT)" || die "it did not come back: kimios-headless logs"
+    echo "New token. The old link no longer works."
+    url
+    ;;
+  stop) systemctl --user disable --now "$UNIT"; echo "Stopped. kimios-headless setup starts it again." ;;
+  logs) journalctl --user -u "$UNIT" -n "${2:-60}" --no-pager ;;
+  *) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; [[ -n "${1:-}" ]] && exit 2 || exit 0 ;;
+esac

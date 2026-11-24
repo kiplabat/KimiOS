@@ -1,0 +1,21 @@
+# KimiOS 0.15.0 headless: KimiLM's engine without a window, for the person who ran `kimios-headless setup`.
+# It listens on this computer only (127.0.0.1); people reach it through SSH (`kimios-headless url` says how).
+# The same data folder as the desktop app (~/.config/KimiLM), so a machine can switch between the two profiles.
+[Unit]
+Description=KimiLM without a desktop (KimiOS headless)
+ConditionPathExists=/usr/lib/kimilm/resources/python/bin/python3
+ConditionPathExists=%h/.config/kimilm-headless/engine.env
+
+[Service]
+Slice=kimilm.slice
+EnvironmentFile=%h/.config/kimilm-headless/engine.env
+Environment=DVA_UI_DIR=/usr/lib/kimilm/resources/ui DVA_NODE=/usr/bin/node DVA_SECRETS=file KIMIOS_HEADLESS=1
+Environment=DVA_PLAYWRIGHT_MCP=/usr/lib/kimilm/resources/app.asar.unpacked/node_modules/@playwright/mcp/cli.js
+Environment=PYTHONUTF8=1 PYTHONIOENCODING=utf-8 PYTHONNOUSERSITE=1 NO_PROXY=127.0.0.1,localhost
+WorkingDirectory=/usr/lib/kimilm/resources/engine
+ExecStart=/usr/lib/kimilm/resources/python/bin/python3 -m dva serve --port ${KIMILM_PORT} --data-dir %h/.config/KimiLM --resources /usr/lib/kimilm/resources
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

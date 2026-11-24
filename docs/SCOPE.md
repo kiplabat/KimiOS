@@ -375,6 +375,23 @@ outside KimiOS:
   and Vulkan builds; each image installs the KimiLM build of its own architecture. Not yet on ARM64: the image and
   music engines (no upstream builds), and booting on a Raspberry Pi (needs UEFI firmware on the board).
 - Headless profile for appliances and robots (no desktop; voice and network control).
+- **Started (0.15.0): the headless profile.** The same Containerfile builds a second image,
+  `ghcr.io/kiplabat/kimios-headless`, on `fedora-bootc` instead of Silverblue (`PROFILE=headless`).
+  - It has no desktop or session to choose. Instead it has SSH, avahi (found as `<name>.local`), Wi-Fi and its
+    firmware, Node.js for the MCP servers KimiLM starts, toolbox, and Vulkan drivers. Everything else is the same:
+    the guard, the bench, snapshots, the device rules, the registry tools.
+  - KimiLM's engine runs as the person's own service, `kimilm-headless.service` in `kimilm.slice`. It uses the same
+    data folder as the desktop app, so a machine can switch between the two profiles.
+  - `kimios-headless setup` makes a private token (0600) and keeps the service running without anyone logged in
+    (lingering), then starts it.
+  - The engine listens on 127.0.0.1 only. People reach it through an SSH tunnel and a browser link with the token;
+    `kimios-headless url|status|rotate|stop|logs` handle the rest. Nothing on the network reaches it without the
+    machine's account.
+  - The build starts the engine inside the headless image and checks that it answers and serves its interface.
+  - Both images are built for x86_64 and ARM64 and signed with the same key, and the policy requires both to be
+    signed.
+  - Not yet: voice; an installer ISO for headless (today: switch an installed KimiOS, or `bootc install to-disk`
+    from any Linux with podman); the browser tools' Chromium libraries on fedora-bootc (untested).
 
 ---
 

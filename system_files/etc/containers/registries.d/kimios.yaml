@@ -3,3 +3,5 @@
 docker:
   ghcr.io/kiplabat/kimios:
     use-sigstore-attachments: true
+  ghcr.io/kiplabat/kimios-headless:
+    use-sigstore-attachments: true

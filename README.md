@@ -82,6 +82,28 @@ copied). `kimios-snapshot changes latest ~/Documents` lists what was added, chan
 the `snapshot` tool. If the simulated devices are missing after updating from 0.9.0, run
 `sudo systemctl restart kimios-envelope-setup kimi-simbench kimi-envelope` (0.11.0 does this at boot).
 
+## Headless (0.15.0)
+
+`ghcr.io/kiplabat/kimios-headless` is KimiOS without a desktop, for a box that sits somewhere and is used from
+another computer. On a machine that already runs KimiOS, switch it, then reboot:
+
+```bash
+sudo bootc switch --enforce-container-sigpolicy ghcr.io/kiplabat/kimios-headless:latest && systemctl reboot
+```
+
+Leave out `--enforce-container-sigpolicy` if signature checking was never turned on on that machine. The same
+command with `kimios` instead of `kimios-headless` switches back to the desktop.
+
+After the reboot, sign in on its screen or over SSH (`ssh you@<name>.local`) and run `kimios-headless setup`. It
+prints two lines for the computer you use:
+- an `ssh -N -L 8765:localhost:8765 …` tunnel;
+- a `http://localhost:8765/?token=…` link to open there.
+
+KimiLM listens on the box itself only; the tunnel is the way in. Other commands:
+- `kimios-headless url` shows the lines again;
+- `rotate` makes a new token;
+- `status`, `logs`, `stop`.
+
 ## Develop
 
 ```bash
