@@ -29,7 +29,7 @@ import sys
 import time
 from pathlib import Path
 
-VERSION = "0.13.1"
+VERSION = "0.14.0"
 ROOT = Path(os.environ.get("KIMIOS_ROOT", "/"))        # tests point this at a fake /sys and /proc
 HARDWARE_JSON = Path(os.environ.get("KIMIOS_HARDWARE_JSON", "/var/lib/kimios/hardware.json"))
 TELEMETRY_JSON = Path(os.environ.get("KIMIOS_TELEMETRY_JSON", "/run/kimios/telemetry.json"))   # kimi-telemetry (0.6.0)
@@ -756,7 +756,70 @@ def tool_bench(device=None, send=None):
     return out
 
 
-def tool_driver(device, action, manifest=None, version=None, note=None):
+def _share():
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import kimios_share
+    return kimios_share
+
+
+def _shared(fn, *a, **k):
+    sh = _share()
+    try:
+        return fn(sh, *a, **k)
+    except sh.ShareError as exc:
+        raise ToolError(str(exc)) from None
+
+
+def _shared_entries(kind, device, action, entry, body, note, results=None):
+    """0.14.0: find, get and share drivers and controllers through the registry (kimios_share.py)."""
+    dev = _ask({"op": "device", "device": device})
+    ds, simulated = dev["datasheet"], dev.get("simulated", False)
+    if action == "find":
+        return _shared(lambda sh: sh.find(ds, kind))
+    if action == "get":
+        if not entry:
+            raise ToolError("give entry: a path from find")
+        e = _shared(lambda sh: sh.get(entry, ds))
+        if kind == "driver":
+            test = _ask({"op": "driver_test", "device": device, "manifest": e["driver"]})
+            out = {"entry": entry, "note": e.get("note"), "manifest": e["driver"], "test": test}
+            out["next"] = (f"it passed on this device: promote it with driver(action='promote', manifest=…, "
+                           f"note='from the registry: {entry}')" if test.get("passed") else
+                           "it did not pass on this device: do not promote it; fix it or write one from the datasheet")
+            return out
+        check = _ask({"op": "controller_check", "device": device, "spec": e["controller"]})
+        return {"entry": entry, "note": e.get("note"), "spec": e["controller"], "check": check,
+                "results_elsewhere": e.get("evidence"),
+                "next": "if check has no problems, start it with controller(action='start', spec=…); the guard holds "
+                        "it to this device's datasheet"}
+    # share: only what works here now
+    if kind == "driver":
+        manifest = body or dev["driver"].get("manifest")          # the given manifest, or the current version
+        if not manifest:
+            raise ToolError("this device has no driver to share yet")
+        test = _ask({"op": "driver_test", "device": device, "manifest": manifest})
+        if not test.get("passed"):
+            raise ToolError("only a driver that passes its test now can be shared: "
+                            + "; ".join(f"{c['what']}: {c['detail']}" for c in test["checks"] if not c["ok"]))
+        evidence = {"test": "passed", "checks": len(test["checks"]), "on": "simulated" if simulated else "real device"}
+    else:
+        spec = body or (dev.get("status") or {}).get("controller")
+        if not spec:
+            raise ToolError("give the spec to share, or share while it runs")
+        check = _ask({"op": "controller_check", "device": device, "spec": spec})
+        if check.get("problems"):
+            raise ToolError("only a controller the guard accepts can be shared: " + "; ".join(check["problems"]))
+        manifest = spec
+        evidence = {"check": "accepted", "on": "simulated" if simulated else "real device"}
+        if isinstance(results, dict) and results:
+            evidence["results"] = {str(k)[:40]: v for k, v in list(results.items())[:12]
+                                   if isinstance(v, (int, float, str, bool))}
+    return _shared(lambda sh: sh.prepare(sh.make_entry(kind, ds, manifest, evidence, note, simulated, VERSION)))
+
+
+def tool_driver(device, action, manifest=None, version=None, note=None, entry=None):
+    if action in ("find", "get", "share"):
+        return _shared_entries("driver", device, action, entry, manifest, note)
     if action == "test":
         if not manifest:
             raise ToolError("give the manifest to test")
@@ -771,7 +834,7 @@ def tool_driver(device, action, manifest=None, version=None, note=None):
         return _ask({"op": "device", "device": device})["driver"]
     if action == "rollback":
         return _ask({"op": "driver_rollback", "device": device, "version": version})
-    raise ToolError("action is test, promote, versions or rollback")
+    raise ToolError("action is test, promote, versions, rollback, find, get or share")
 
 
 def _bench_csv(device, rows):
@@ -815,7 +878,9 @@ def tool_bench_event(device, event, args=None):
     return _sim_control({"device": device, "event": event, "args": args or {}})
 
 
-def tool_controller(device, action, spec=None):
+def tool_controller(device, action, spec=None, entry=None, note=None, results=None):
+    if action in ("find", "get", "share"):
+        return _shared_entries("controller", device, action, entry, spec, note, results)
     if action == "check":
         return _ask({"op": "controller_check", "device": device, "spec": spec})
     if action == "start":
@@ -824,7 +889,7 @@ def tool_controller(device, action, spec=None):
         return out
     if action == "stop":
         return _ask({"op": "controller_stop", "device": device})
-    raise ToolError("action is check, start or stop")
+    raise ToolError("action is check, start, stop, find, get or share")
 
 
 # ------------------------------------------------------------------------------------------------- the tool list
@@ -934,10 +999,14 @@ TOOLS = {
                "as in the datasheet ((?P<t_top>-?[\\d.]+)); command contains {value}; ok is a regular expression "
                "the answer must match (default ^OK); scale turns 0..1 into the device's units (100 for percent). "
                "action test: try it (moves nothing); promote: keep it as the next version (it must pass); "
-               "versions; rollback to a version.",
-               _schema({"device": S, "action": {"enum": ["test", "promote", "versions", "rollback"]},
-                        "manifest": {"type": "object"}, "version": {"type": "integer"}, "note": S},
-                       ("device", "action")), _ann(False)),
+               "versions; rollback to a version. Shared drivers (KimiOS's registry, before writing one): find "
+               "lists those for this device's model; get (entry) downloads one and tests it here; share prepares "
+               "the current driver (or manifest) for the person to propose: they get a file and a link, nothing is "
+               "sent on its own.",
+               _schema({"device": S, "action": {"enum": ["test", "promote", "versions", "rollback", "find", "get",
+                                                         "share"]},
+                        "manifest": {"type": "object"}, "version": {"type": "integer"}, "note": S, "entry": S},
+                       ("device", "action")), _ann(False, open_world=True)),
     "bench_experiment": (tool_bench_experiment, "Learn how a bench device responds: set outputs in steps and "
                          "record every reading (times in device seconds; simulated devices run faster than the "
                          "clock). steps: [{set: {output: value}, seconds}], or output, value, seconds and after_s. "
@@ -951,9 +1020,14 @@ TOOLS = {
                    "[{name, sensor, output, setpoint, action: cool|heat, mode: onoff (band) | pi (kp, ti_s, "
                    "pwm_period_s for on/off outputs), also: [outputs this loop needs on too]}]}. Set points must be "
                    "inside the datasheet's allowed range; outputs no loop drives stay at their safe value. action "
-                   "check: what is wrong; start; stop (the device's own controller takes over).",
-                   _schema({"device": S, "action": {"enum": ["check", "start", "stop"]}, "spec": {"type": "object"}},
-                           ("device", "action")), _ann(False, physical=True)),
+                   "check: what is wrong; start; stop (the device's own controller takes over). Shared controllers: "
+                   "find (for this device's model), get (entry: downloads it and checks it against this datasheet; "
+                   "start it yourself), share (the running controller or spec, with results such as time in band "
+                   "and starts per hour: the person gets a file and a link to propose it, nothing is sent on its "
+                   "own).",
+                   _schema({"device": S, "action": {"enum": ["check", "start", "stop", "find", "get", "share"]},
+                            "spec": {"type": "object"}, "entry": S, "note": S, "results": {"type": "object"}},
+                           ("device", "action")), _ann(False, physical=True, open_world=True)),
     "bench_event": (tool_bench_event, "Simulated devices only: make something happen to test a controller. Fridge: "
                     "door_open {seconds}, warm_load {compartment: top|bottom, degrees}, ambient {value}; room: "
                     "ambient {value}, door_open; any: sensor_fault {sensor, mode: dead|stuck, seconds}.",

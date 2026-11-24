@@ -343,6 +343,28 @@ outside KimiOS:
   bench now run as a fixed system user `kimi-envelope` (sysusers.d), so udev can give it a real port.
 - KimiOS Edge firmware for one microcontroller family.
 - Opt-in registry for drivers and skills.
+- **Started (0.14.0): the registry, shared on purpose (principle 6).** Drivers and controllers that work go to
+  `kiplabat/kimios-registry` as `drivers/<model>/driver-<id>.json` and `controllers/<model>/controller-<id>.json`.
+  Each entry has:
+  - the model;
+  - its shape (the datasheet's sensor and output names);
+  - the datasheet it was written for, without anything that names the machine (device id, port, serial number);
+  - its evidence (a passed test; for a controller, measured results such as time in band and starts per hour).
+
+  `<id>` is a hash of the driver or controller, so the same one shared twice is the same file. Agents use new
+  actions on the existing tools (no new tool):
+  - `driver` and `controller`: `find` lists the entries for a device's model and shape;
+  - `get` checks an entry against the index's sha256, then tests a driver on the device (it moves nothing;
+    promoting stays a separate step, only after it passes) or checks a controller against the machine's own
+    datasheet (the guard holds it to that datasheet whatever the entry says);
+  - `share` only works for what passes here now. It writes the entry under `~/.local/share/kimios/share` and gives
+    a link to the registry's "new file" page with the entry filled in. The person reads it and presses *Propose
+    changes*, which opens a pull request. Nothing is sent on its own, and no GitHub sign-in is kept on the machine
+    (`kimios_share.py`).
+
+  The registry starts with the simulated fridge's and room's drivers and the fridge's two-loop controller. That
+  controller was measured over 6 h of device time on the simulator: top 3.98 °C mean (max 0.7 °C off 4), bottom
+  −18.02 °C (max 1.2 off), 2.8 compressor starts an hour, 53 % duty.
 
 ### Phase 5 — Other architectures and form factors
 
@@ -415,7 +437,10 @@ Tests: `python3 -m unittest discover -s tests -v`
    `insecureAcceptAnything` (Fedora's). The default is now `reject`, and each transport (docker, docker-daemon,
    containers-storage, the archives, dir, oci, sif, tarball) keeps accepting other images through its own `""`
    scope, so podman, toolbox and local builds behave as before; only KimiOS's own scope requires the signature.
-3. **Registry for drivers and skills:** where it lives and how submissions are reviewed (Phase 4).
+3. **Registry for drivers and skills:** decided and built (0.14.0): the public repository
+   `kiplabat/kimios-registry` (Apache-2.0), reviewed by pull request. Its check runs KimiOS's own datasheet,
+   manifest and spec checks on every entry (and a simulated device's driver against KimiOS's simulator), and
+   rebuilds `index.json` on main.
 4. **Name of the edge firmware** and the first microcontroller family (ESP32 suggested).
 
 ---
