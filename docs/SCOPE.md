@@ -205,10 +205,10 @@ is a workflow artifact. Not yet: an ARM64 ISO, signed images (open decision 2); 
 branding.
 
 **Installer polish (after 0.15.0).**
-- The installer is called KimiOS. Anaconda names the product from os-release (NAME, VERSION_ID) and showed
-  "anaconda bluesky" when it could not read them. `iso/files/os-release` now gives NAME KimiOS and VERSION_ID 45.
-  RELEASE_TYPE is stable, so there is no pre-release warning. ID stays fedora, which keeps Anaconda's Fedora
-  profile.
+- The installer is called KimiOS. Fedora 45's Anaconda names the product from `/.buildstamp` and showed
+  "anaconda bluesky" without one; newer Anaconda reads os-release instead. Both files now name KimiOS 45, final
+  (IsFinal, RELEASE_TYPE stable: no pre-release warning). ID stays fedora, which keeps Anaconda's Fedora
+  profile. The build asserts the name Anaconda itself computes.
 - Installing needs no network when KimiOS is on the stick. Anaconda's bootc source returned `network_required`
   True for every source; `iso/files/offline_bootc.py` makes it false for containers-storage, oci and dir sources.
   It edits the one block it expects and stops the build if Anaconda's code changed.

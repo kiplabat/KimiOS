@@ -1,0 +1,6 @@
+[Main]
+Product=KimiOS
+Version=45
+BugURL=https://github.com/kiplabat/KimiOS/issues
+IsFinal=True
+Variant=

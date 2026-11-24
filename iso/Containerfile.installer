@@ -61,9 +61,11 @@ RUN mkdir -p /boot/efi && cp -ra /usr/lib/efi/*/*/EFI /boot/efi
 # the ISO's label and boot menu (files/: no heredocs, the build runner's podman does not read them)
 COPY files/iso.yaml /usr/lib/image-builder/bootc/iso.yaml
 
-# KimiOS's name in the installer. Anaconda names the product from os-release (NAME, VERSION_ID), and shows
-# "anaconda bluesky" when it cannot read them, and a pre-release warning unless RELEASE_TYPE is stable. ID stays
-# fedora: Anaconda's Fedora profile (partitioning defaults) is chosen by it. A real file, not a link.
+# KimiOS's name in the installer. Fedora 45's Anaconda names the product from /.buildstamp (Product, Version,
+# IsFinal) and shows "anaconda bluesky" without one (as the Dell did); newer Anaconda reads os-release (NAME,
+# VERSION_ID, RELEASE_TYPE) instead, so both say KimiOS. IsFinal / RELEASE_TYPE stable: no pre-release warning.
+# ID stays fedora: Anaconda's Fedora profile (partitioning defaults) is chosen by it.
+COPY files/buildstamp /.buildstamp
 COPY files/os-release /usr/lib/os-release
 RUN rm -f /etc/os-release && cp /usr/lib/os-release /etc/os-release
 

@@ -85,7 +85,11 @@ jobs:
             grep -x "RELEASE_TYPE=stable" /usr/lib/os-release
             f=$(ls /usr/lib*/python3*/site-packages/pyanaconda/modules/payloads/source/bootc/bootc.py)
             grep -q "KimiOS: not when the image is on the installation medium" "$f"
-            python3 -c "import pyanaconda.core.product as p; print(p.get_product_values())"'
+            python3 -c "
+          import pyanaconda.core.product as p
+          v = p.get_product_values()
+          print(v)
+          assert (v.name, v.version, v.is_final_release) == (\"KimiOS\", \"45\", True), v"'
 
       - name: Build the ISO
         run: |
@@ -107,11 +111,6 @@ jobs:
           ls -lh /mnt/out
           echo "ISO=/mnt/out/$NAME" >> "$GITHUB_ENV"
 
-      - name: Inside the ISO, what Anaconda will read
-        run: |
-          sudo apt-get install -y -qq xorriso squashfs-tools erofs-utils >/dev/null || true
-          bash iso/check_iso.sh "$ISO"
-
       - uses: actions/upload-artifact@v4
         with:
           name: kimios-installer-${{ matrix.arch }}
@@ -120,3 +119,9 @@ jobs:
             ${{ env.ISO }}.sha256
           compression-level: 0
           retention-days: ${{ github.event_name == 'pull_request' && 7 || 30 }}
+
+      # after the upload: a failure here still leaves the ISO to look at
+      - name: Inside the ISO, what Anaconda will read
+        run: |
+          sudo apt-get install -y -qq xorriso squashfs-tools erofs-utils >/dev/null || true
+          bash iso/check_iso.sh "$ISO"

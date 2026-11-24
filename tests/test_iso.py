@@ -52,8 +52,14 @@ class Polish(unittest.TestCase):
         self.assertEqual(osr["ID"], "fedora")            # Anaconda's Fedora profile is chosen by ID
         self.assertEqual(osr["RELEASE_TYPE"], "stable")  # no pre-release warning
         self.assertEqual(osr["VERSION_ID"], "45")
+        stamp = (ISO / "files/buildstamp").read_text().split("\n")
+        for line in ("[Main]", "Product=KimiOS", "Version=45", "IsFinal=True"):   # Fedora 45's Anaconda reads these
+            self.assertIn(line, stamp)
         cf = (ISO / "Containerfile.installer").read_text()
+        self.assertIn("COPY files/buildstamp /.buildstamp", cf)
         self.assertIn("COPY files/os-release /usr/lib/os-release", cf)
+        wf = (REPO / ".github/workflows/iso.yml").read_text()
+        self.assertIn('(\\"KimiOS\\", \\"45\\", True)', wf)           # the build asserts Anaconda's own answer
         self.assertIn("cp /usr/lib/os-release /etc/os-release", cf)
 
     def test_offline_change_applies_once_and_only_to_the_expected_code(self):
