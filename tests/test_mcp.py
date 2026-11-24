@@ -165,6 +165,25 @@ class ToolTest(unittest.TestCase):
             self.assertEqual([a["name"] for a in found["apps"]], ["Sub App"])
             self.assertEqual(mcp.tool_software("", kinds=["apps"])["matched"], 2)
 
+    def test_apps_kimilm_built_are_apps_that_open_in_kimilm(self):
+        """0.16.0: a game or control panel KimiLM put in the apps menu is an app the registry knows as KimiLM's."""
+        apps = self.root / "share2/applications"
+        put(apps / "kimilm-app-orbit-racer.desktop", "[Desktop Entry]\nType=Application\nName=Orbit Racer\n"
+            "Comment=A race\nExec=/usr/bin/kimilm --open-app=orbit-racer\nCategories=Game;\n"
+            "X-KimiLM-App=orbit-racer\nX-KimiLM-Kind=game\n")
+        put(apps / "kimilm-app-climate-panel.desktop", "[Desktop Entry]\nType=Application\nName=Climate panel\n"
+            "Exec=/usr/bin/kimilm --open-app=climate-panel\nX-KimiLM-App=climate-panel\nX-KimiLM-Kind=device\n")
+        entries = {e["id"]: e for e in mcp.desktop_entries([self.root / "share2"])}
+        self.assertEqual(entries["kimilm-app-orbit-racer.desktop"]["kimilm_app"], {"id": "orbit-racer", "kind": "game"})
+        self.assertEqual(entries["kimilm-app-climate-panel.desktop"]["kimilm_app"]["kind"], "control panel")
+        reg = mcp._registry()
+        listed = {e["id"]: e for e in reg.from_apps(list(entries.values()))}
+        self.assertIn("own KimiLM window", listed["kimilm-app-orbit-racer.desktop"]["reach"])
+        with mock.patch.object(mcp, "desktop_entries", lambda dirs=None: list(entries.values())), \
+                mock.patch.object(reg, "CACHE", self.root / "cache2/registry.json"):
+            found = mcp.tool_software("kimilm game", kinds=["apps"])
+            self.assertEqual([a["name"] for a in found["apps"]], ["Orbit Racer"])
+
     def test_settings_outside_the_allow_list_are_refused(self):
         with self.assertRaises(mcp.ToolError) as cm:
             mcp.tool_setting_set("org.gnome.desktop.lockdown", "disable-lock-screen", "true")

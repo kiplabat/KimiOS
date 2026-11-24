@@ -29,7 +29,7 @@ import sys
 import time
 from pathlib import Path
 
-VERSION = "0.15.0"
+VERSION = "0.16.0"
 ROOT = Path(os.environ.get("KIMIOS_ROOT", "/"))        # tests point this at a fake /sys and /proc
 HARDWARE_JSON = Path(os.environ.get("KIMIOS_HARDWARE_JSON", "/var/lib/kimios/hardware.json"))
 TELEMETRY_JSON = Path(os.environ.get("KIMIOS_TELEMETRY_JSON", "/run/kimios/telemetry.json"))   # kimi-telemetry (0.6.0)
@@ -467,6 +467,11 @@ def desktop_entries(dirs=None):
                 "opens": split(e.get("MimeType"))[:12], "actions": split(e.get("Actions")),
                 "flatpak": "flatpak" in str(f) or "X-Flatpak" in e,
             }
+            # 0.16.0: an app KimiLM built (a game, or a device's control panel): it opens in KimiLM
+            if e.get("X-KimiLM-App"):
+                kind = "game" if e.get("X-KimiLM-Kind") == "game" else "control panel"
+                apps[app_id]["kimilm_app"] = {"id": e["X-KimiLM-App"], "kind": kind}
+                apps[app_id]["keywords"] += ["kimilm", kind]
     return list(apps.values())
 
 

@@ -25,7 +25,7 @@ class DeviceAccess(unittest.TestCase):
             self.assertNotIn("GROUP=", ln)
             self.assertEqual(ln.count('"') % 2, 0, ln)
             for key in re.findall(r'(\w+(?:\{\w+\})?)(==|\+=|=)"', ln):
-                self.assertIn(key[0].split("{")[0], {"SUBSYSTEM", "KERNEL", "ENV", "ATTR", "ATTRS", "TAG"}, ln)
+                self.assertIn(key[0].split("{")[0], {"SUBSYSTEM", "KERNEL", "KERNELS", "ENV", "ATTR", "ATTRS", "TAG"}, ln)
 
     def test_phones_serial_ports_boards_and_displays_are_covered(self):
         text = "\n".join(rules())
@@ -35,6 +35,15 @@ class DeviceAccess(unittest.TestCase):
         self.assertRegex(text, r"idVendor\}==\"[^\"]*2e8a")       # Raspberry Pi
         self.assertIn('SUBSYSTEM=="i2c-dev"', text)               # ddcutil
         self.assertNotRegex(text, r'SUBSYSTEM=="hidraw"(?!.*idVendor)')   # never every keyboard's raw input
+
+
+    def test_game_controllers_only_from_controller_makers(self):
+        """0.16.0: raw reports of game controllers, never of a keyboard maker's devices (045e, 046d)."""
+        pads = [ln for ln in rules() if "hidraw" in ln and ("054c" in ln.lower())]
+        self.assertEqual(len(pads), 2)                    # USB and Bluetooth
+        for ln in pads:
+            self.assertNotRegex(ln.lower(), r"045e|046d")
+        self.assertTrue(any(ln.startswith('KERNEL=="hidraw*", KERNELS==') for ln in pads))
 
 
 class ImageHasTheTools(unittest.TestCase):

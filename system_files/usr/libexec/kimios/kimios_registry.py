@@ -260,7 +260,12 @@ def plugins():
 def from_apps(apps):
     out = []
     for a in apps or []:
-        out.append({**a, "kind": "apps", "reach": f"launch_app {a['id']}; or open a file it handles with `open`"})
+        if a.get("kimilm_app"):        # 0.16.0: a game or control panel KimiLM built: it opens in a KimiLM window
+            reach = (f"launch_app {a['id']} (opens in its own KimiLM window); changed, rebuilt or removed in KimiLM → "
+                     "Apps")
+        else:
+            reach = f"launch_app {a['id']}; or open a file it handles with `open`"
+        out.append({**a, "kind": "apps", "reach": reach})
     return out
 
 
